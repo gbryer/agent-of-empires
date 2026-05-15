@@ -1686,7 +1686,10 @@ mod tests {
     // default until Phase 6 (RT-09) potentially flips it.
     #[test]
     fn test_container_runtime_name_default_is_docker() {
-        assert_eq!(ContainerRuntimeName::default(), ContainerRuntimeName::Docker);
+        assert_eq!(
+            ContainerRuntimeName::default(),
+            ContainerRuntimeName::Docker
+        );
     }
 
     // Confirms the new variant did not regress serde for the three existing

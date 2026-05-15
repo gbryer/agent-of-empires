@@ -933,6 +933,7 @@ fn build_sandbox_fields(
         ContainerRuntimeName::Docker => 0,
         ContainerRuntimeName::Podman => 1,
         ContainerRuntimeName::AppleContainer => 2,
+        ContainerRuntimeName::Sbx => 3,
     };
 
     let global_terminal_mode_selected = match global.sandbox.default_terminal_mode {
@@ -945,9 +946,14 @@ fn build_sandbox_fields(
         ContainerRuntimeName::Docker => 0,
         ContainerRuntimeName::Podman => 1,
         ContainerRuntimeName::AppleContainer => 2,
+        ContainerRuntimeName::Sbx => 3,
     };
-    let container_runtime_options =
-        vec!["Docker".into(), "Podman".into(), "Apple Container".into()];
+    let container_runtime_options = vec![
+        "Docker".into(),
+        "Podman".into(),
+        "Apple Container".into(),
+        "Docker Sandboxes".into(),
+    ];
 
     vec![
         SettingField {
@@ -1817,7 +1823,8 @@ fn apply_field_to_global(field: &SettingField, config: &mut Config) {
             config.sandbox.container_runtime = match selected {
                 0 => ContainerRuntimeName::Docker,
                 1 => ContainerRuntimeName::Podman,
-                _ => ContainerRuntimeName::AppleContainer,
+                2 => ContainerRuntimeName::AppleContainer,
+                _ => ContainerRuntimeName::Sbx,
             };
         }
         // Tmux
@@ -2105,7 +2112,8 @@ fn apply_field_to_profile(field: &SettingField, _global: &Config, config: &mut P
             let runtime = match selected {
                 0 => ContainerRuntimeName::Docker,
                 1 => ContainerRuntimeName::Podman,
-                _ => ContainerRuntimeName::AppleContainer,
+                2 => ContainerRuntimeName::AppleContainer,
+                _ => ContainerRuntimeName::Sbx,
             };
             set_profile_override(runtime, &mut config.sandbox, |s, val| {
                 s.container_runtime = val

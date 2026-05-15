@@ -20,6 +20,7 @@ pub fn runtime_binary() -> &'static str {
             ContainerRuntimeName::AppleContainer => "container",
             ContainerRuntimeName::Docker => "docker",
             ContainerRuntimeName::Podman => "podman",
+            ContainerRuntimeName::Sbx => "sbx",
         }
     } else {
         "docker"
@@ -32,6 +33,7 @@ pub fn get_container_runtime() -> ContainerRuntime {
             ContainerRuntimeName::AppleContainer => ContainerRuntime::apple_container(),
             ContainerRuntimeName::Docker => ContainerRuntime::docker(),
             ContainerRuntimeName::Podman => ContainerRuntime::podman(),
+            ContainerRuntimeName::Sbx => ContainerRuntime::sbx(),
         }
     } else {
         ContainerRuntime::default()
