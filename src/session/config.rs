@@ -1662,4 +1662,46 @@ mod tests {
         let serialized = toml::to_string(&parsed).unwrap();
         assert!(serialized.contains(r#"container_runtime = "podman""#));
     }
+
+    // The snake_case rename_all attribute lowercases the single-word PascalCase
+    // variant Sbx to "sbx"; an explicit per-variant rename attribute is not
+    // needed and is verified absent by the plan's grep gate.
+    #[test]
+    fn test_container_runtime_name_sbx_serializes_to_snake_case() {
+        let json = serde_json::to_string(&ContainerRuntimeName::Sbx).unwrap();
+        assert_eq!(json, "\"sbx\"");
+    }
+
+    // Mirror of the serialize test; if either direction breaks, on-disk TOML
+    // with container_runtime = "sbx" would silently fall back to the docker
+    // default the same way the podman regression hazard described above does.
+    #[test]
+    fn test_container_runtime_name_sbx_deserializes_from_snake_case() {
+        let parsed: ContainerRuntimeName = serde_json::from_str("\"sbx\"").unwrap();
+        assert_eq!(parsed, ContainerRuntimeName::Sbx);
+    }
+
+    // Phase 1 does NOT change the default runtime (D-05); Docker stays the
+    // default until Phase 6 (RT-09) potentially flips it.
+    #[test]
+    fn test_container_runtime_name_default_is_docker() {
+        assert_eq!(ContainerRuntimeName::default(), ContainerRuntimeName::Docker);
+    }
+
+    // Confirms the new variant did not regress serde for the three existing
+    // variants. If a per-variant rename or attribute drift were introduced,
+    // this test would catch it before the silent-config-fallback hazard.
+    #[test]
+    fn test_container_runtime_name_existing_variants_round_trip() {
+        for (variant, expected) in [
+            (ContainerRuntimeName::AppleContainer, "\"apple_container\""),
+            (ContainerRuntimeName::Docker, "\"docker\""),
+            (ContainerRuntimeName::Podman, "\"podman\""),
+        ] {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, expected, "serialize mismatch for {:?}", variant);
+            let parsed: ContainerRuntimeName = serde_json::from_str(expected).unwrap();
+            assert_eq!(parsed, variant, "deserialize mismatch for {}", expected);
+        }
+    }
 }
