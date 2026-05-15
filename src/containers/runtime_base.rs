@@ -89,6 +89,35 @@ impl RuntimeBase {
         },
     };
 
+    // Phase 1 stub for Docker Sandboxes. The placeholder daemon_check_args,
+    // pull_prefix, and remove_subcommand values are never exercised because
+    // ContainerRuntime's is_available short-circuits to false unconditionally
+    // (D-05) and every dispatch arm in runtime.rs returns a safe stub. Phase 5
+    // (RT-02) replaces daemon_check_args with the real composite probe; Phase 2
+    // (RT-04) replaces remove_subcommand with sbx's actual `sbx rm` shape.
+    // pull_prefix is intentionally empty because supports_image_pull is false.
+    pub const SBX: Self = Self {
+        binary: "sbx",
+        name: "Docker Sandboxes",
+        daemon_check_args: &["version"],
+        pull_prefix: &[],
+        remove_subcommand: "rm",
+        // Honest sbx values per CONTEXT.md <specifics>: no read-only mounts,
+        // no volume removal verb, port publish happens out-of-band post-create
+        // (so supports_dynamic_port_publish is true while
+        // supports_port_publish_at_create is false), no image pull verb,
+        // no anonymous volumes, no arbitrary volume paths.
+        capabilities: RuntimeCapabilities {
+            supports_read_only_volumes: false,
+            supports_remove_volumes: false,
+            supports_port_publish_at_create: false,
+            supports_image_pull: false,
+            supports_anonymous_volumes: false,
+            supports_arbitrary_volume_paths: false,
+            supports_dynamic_port_publish: true,
+        },
+    };
+
     pub fn command(&self) -> Command {
         Command::new(self.binary)
     }

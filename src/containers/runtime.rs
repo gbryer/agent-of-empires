@@ -16,6 +16,7 @@ pub enum RuntimeKind {
     Docker,
     AppleContainer,
     Podman,
+    Sbx,
 }
 
 pub struct ContainerRuntime {
@@ -44,6 +45,17 @@ impl ContainerRuntime {
             kind: RuntimeKind::Podman,
         }
     }
+
+    // Phase 1 stub; pairs RuntimeBase::SBX with RuntimeKind::Sbx so every
+    // dispatch site reaches a safe-stub arm. Phase 2 swaps this for the real
+    // SbxRuntime peer struct without re-touching the ~12 callers of
+    // get_container_runtime().
+    pub fn sbx() -> Self {
+        Self {
+            base: RuntimeBase::SBX,
+            kind: RuntimeKind::Sbx,
+        }
+    }
 }
 
 impl Default for ContainerRuntime {
@@ -53,8 +65,17 @@ impl Default for ContainerRuntime {
 }
 
 impl ContainerRuntimeInterface for ContainerRuntime {
+    // Sbx short-circuits to false unconditionally (D-05 Phase 1 stub
+    // contract). A binary named `sbx` on PATH cannot be exercised by aoe
+    // during Phase 1; Phase 2 (RT-02) introduces real `which sbx` probing.
+    // The match arm here intentionally does NOT delegate to
+    // self.base.is_available() for Sbx, since base.is_available() runs
+    // `sbx --version` which would return true if the binary is installed.
     fn is_available(&self) -> bool {
-        self.base.is_available()
+        match self.kind {
+            RuntimeKind::Sbx => false,
+            _ => self.base.is_available(),
+        }
     }
 
     fn is_daemon_running(&self) -> bool {
@@ -106,6 +127,12 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 let output = self.base.command().args(["logs", name]).output()?;
                 Ok(output.status.success())
             }
+            RuntimeKind::Sbx => {
+                // Phase 1 stub; no sbx container can exist while is_available
+                // returns false. Phase 2 (RT-04) replaces with `sbx inspect`.
+                let _ = name;
+                Ok(false)
+            }
         }
     }
 
@@ -140,6 +167,13 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 } else {
                     Ok(false)
                 }
+            }
+            RuntimeKind::Sbx => {
+                // Phase 1 stub; no sbx container can be running while
+                // is_available returns false. Phase 2 (RT-04) replaces with
+                // sbx's running-state probe.
+                let _ = name;
+                Ok(false)
             }
         }
     }
@@ -203,6 +237,15 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                     ["container", "exec", "-it", name, "sh", "-c", &cmd_str].join(" ")
                 }
             }
+            RuntimeKind::Sbx => {
+                // Addressable string so settings code can format it, but
+                // unreachable in normal flows because is_available returns
+                // false. Phase 2 (RT-04) replaces with the real `sbx exec`
+                // shape.
+                let _ = options;
+                let _ = cmd;
+                format!("sbx exec {}", name)
+            }
         }
     }
 
@@ -248,6 +291,14 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                     .collect()
             }
             RuntimeKind::AppleContainer => {
+                let _ = prefix;
+                HashMap::new()
+            }
+            RuntimeKind::Sbx => {
+                // Phase 1 stub; no sbx containers can exist while
+                // is_available returns false, so the running-states map is
+                // always empty. Phase 2 (RT-04) replaces with the real
+                // `sbx ls` parse.
                 let _ = prefix;
                 HashMap::new()
             }
