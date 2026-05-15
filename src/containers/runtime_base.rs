@@ -89,6 +89,35 @@ impl RuntimeBase {
         },
     };
 
+    // Phase 1 stub for Docker Sandboxes. The placeholder daemon_check_args,
+    // pull_prefix, and remove_subcommand values are never exercised because
+    // ContainerRuntime's is_available short-circuits to false unconditionally
+    // (D-05) and every dispatch arm in runtime.rs returns a safe stub. Phase 5
+    // (RT-02) replaces daemon_check_args with the real composite probe; Phase 2
+    // (RT-04) replaces remove_subcommand with sbx's actual `sbx rm` shape.
+    // pull_prefix is intentionally empty because supports_image_pull is false.
+    pub const SBX: Self = Self {
+        binary: "sbx",
+        name: "Docker Sandboxes",
+        daemon_check_args: &["version"],
+        pull_prefix: &[],
+        remove_subcommand: "rm",
+        // Honest sbx values per CONTEXT.md <specifics>: no read-only mounts,
+        // no volume removal verb, port publish happens out-of-band post-create
+        // (so supports_dynamic_port_publish is true while
+        // supports_port_publish_at_create is false), no image pull verb,
+        // no anonymous volumes, no arbitrary volume paths.
+        capabilities: RuntimeCapabilities {
+            supports_read_only_volumes: false,
+            supports_remove_volumes: false,
+            supports_port_publish_at_create: false,
+            supports_image_pull: false,
+            supports_anonymous_volumes: false,
+            supports_arbitrary_volume_paths: false,
+            supports_dynamic_port_publish: true,
+        },
+    };
+
     pub fn command(&self) -> Command {
         Command::new(self.binary)
     }
@@ -529,6 +558,23 @@ mod tests {
         assert!(!args.iter().any(|a| a.contains("s3cr3t")));
         // Literal: key=value
         assert!(args.contains(&"TERM=xterm".to_string()));
+    }
+
+    // Pins the honest sbx capability matrix per CONTEXT.md <specifics>. If any
+    // flag drifts, Phase 2's real SbxRuntime would inherit a wrong value; the
+    // per-field asserts name the offending flag in test output.
+    #[test]
+    fn test_sbx_runtime_base_const() {
+        let base = RuntimeBase::SBX;
+        assert_eq!(base.binary, "sbx");
+        assert_eq!(base.name, "Docker Sandboxes");
+        assert!(!base.capabilities.supports_read_only_volumes);
+        assert!(!base.capabilities.supports_remove_volumes);
+        assert!(!base.capabilities.supports_port_publish_at_create);
+        assert!(!base.capabilities.supports_image_pull);
+        assert!(!base.capabilities.supports_anonymous_volumes);
+        assert!(!base.capabilities.supports_arbitrary_volume_paths);
+        assert!(base.capabilities.supports_dynamic_port_publish);
     }
 
     #[test]
