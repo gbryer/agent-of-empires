@@ -518,10 +518,12 @@ mod tests {
         assert!(caps.supports_dynamic_port_publish);
     }
 
-    // The four match-self.kind dispatch sites must each have a safe Sbx
+    // The five match-self.kind dispatch sites must each have a safe Sbx
     // arm. is_available short-circuits to false, so callers never reach
     // these paths in normal flows; the safety here is defense-in-depth
     // for any future caller that bypasses the availability gate.
+    // (is_available itself is a sixth match site, tested separately in
+    // test_sbx_is_available_returns_false_unconditionally.)
     #[test]
     fn test_sbx_dispatch_arms_return_safe_stubs() {
         let rt = ContainerRuntime::sbx();
