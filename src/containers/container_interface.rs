@@ -76,6 +76,12 @@ pub struct RuntimeCapabilities {
     pub supports_arbitrary_volume_paths: bool,
     /// Whether this runtime can publish ports after the container has been
     /// created, without recreate/restart workarounds.
+    ///
+    /// Caller-facing metadata; `build_create_args` does not consume this
+    /// flag because port publish at create is gated separately by
+    /// `supports_port_publish_at_create`. Code that publishes ports after
+    /// create (e.g. via an out-of-band `sbx ports` call) reads this flag
+    /// to decide whether the post-create path is available.
     pub supports_dynamic_port_publish: bool,
 }
 

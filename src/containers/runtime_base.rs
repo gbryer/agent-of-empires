@@ -198,6 +198,13 @@ impl RuntimeBase {
             return Ok(());
         }
 
+        if !self.capabilities.supports_image_pull {
+            return Err(DockerError::CommandFailed(format!(
+                "{} does not support image pull; ensure the image '{}' is available through other means",
+                self.name, image
+            )));
+        }
+
         tracing::info!("Pulling {} image '{}'", self.name, image);
         self.pull_image(image)
     }
@@ -228,26 +235,42 @@ impl RuntimeBase {
             config.working_dir.clone(),
         ];
 
-        for vol in &config.volumes {
-            if !self.capabilities.supports_read_only_volumes && vol.read_only {
-                tracing::warn!(
-                    "{} does not support read-only volumes, mounting {} read-write",
-                    self.name,
-                    vol.container_path
-                );
+        if self.capabilities.supports_arbitrary_volume_paths {
+            for vol in &config.volumes {
+                if !self.capabilities.supports_read_only_volumes && vol.read_only {
+                    tracing::warn!(
+                        "{} does not support read-only volumes, mounting {} read-write",
+                        self.name,
+                        vol.container_path
+                    );
+                }
+                let mount = if vol.read_only && self.capabilities.supports_read_only_volumes {
+                    format!("{}:{}:ro", vol.host_path, vol.container_path)
+                } else {
+                    format!("{}:{}", vol.host_path, vol.container_path)
+                };
+                args.push("-v".to_string());
+                args.push(mount);
             }
-            let mount = if vol.read_only && self.capabilities.supports_read_only_volumes {
-                format!("{}:{}:ro", vol.host_path, vol.container_path)
-            } else {
-                format!("{}:{}", vol.host_path, vol.container_path)
-            };
-            args.push("-v".to_string());
-            args.push(mount);
+        } else if !config.volumes.is_empty() {
+            tracing::warn!(
+                "{} does not support arbitrary volume paths; {} bind mount(s) skipped",
+                self.name,
+                config.volumes.len()
+            );
         }
 
-        for path in &config.anonymous_volumes {
-            args.push("-v".to_string());
-            args.push(path.clone());
+        if self.capabilities.supports_anonymous_volumes {
+            for path in &config.anonymous_volumes {
+                args.push("-v".to_string());
+                args.push(path.clone());
+            }
+        } else if !config.anonymous_volumes.is_empty() {
+            tracing::warn!(
+                "{} does not support anonymous volumes; {} path(s) skipped",
+                self.name,
+                config.anonymous_volumes.len()
+            );
         }
 
         for entry in &config.environment {
@@ -263,9 +286,17 @@ impl RuntimeBase {
             }
         }
 
-        for port in &config.port_mappings {
-            args.push("-p".to_string());
-            args.push(port.clone());
+        if self.capabilities.supports_port_publish_at_create {
+            for port in &config.port_mappings {
+                args.push("-p".to_string());
+                args.push(port.clone());
+            }
+        } else if !config.port_mappings.is_empty() {
+            tracing::warn!(
+                "{} does not support port publish at create; {} mapping(s) skipped",
+                self.name,
+                config.port_mappings.len()
+            );
         }
 
         if let Some(cpu) = &config.cpu_limit {
