@@ -10,6 +10,7 @@ use serde_json::Value;
 use super::container_interface::{ContainerConfig, ContainerRuntimeInterface, RuntimeCapabilities};
 use super::error::{DockerError, Result};
 use super::runtime_base::RuntimeBase;
+use super::sbx;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeKind {
@@ -22,6 +23,11 @@ pub enum RuntimeKind {
 pub struct ContainerRuntime {
     pub(crate) base: RuntimeBase,
     pub(crate) kind: RuntimeKind,
+    // Phase 2 plan 02-01: Some(_) when kind == Sbx; None otherwise. The two
+    // Sbx-specialised dispatch arms below (is_available, capabilities) read
+    // this field. Plan 02-02 adds exec_command and build_create_args arms
+    // that also read it, via sbx::argv free functions.
+    pub(crate) sbx: Option<sbx::SbxRuntime>,
 }
 
 impl ContainerRuntime {
@@ -29,6 +35,7 @@ impl ContainerRuntime {
         Self {
             base: RuntimeBase::DOCKER,
             kind: RuntimeKind::Docker,
+            sbx: None,
         }
     }
 
@@ -36,6 +43,7 @@ impl ContainerRuntime {
         Self {
             base: RuntimeBase::APPLE_CONTAINER,
             kind: RuntimeKind::AppleContainer,
+            sbx: None,
         }
     }
 
@@ -43,17 +51,19 @@ impl ContainerRuntime {
         Self {
             base: RuntimeBase::PODMAN,
             kind: RuntimeKind::Podman,
+            sbx: None,
         }
     }
 
-    // Phase 1 stub; pairs RuntimeBase::SBX with RuntimeKind::Sbx so every
-    // dispatch site reaches a safe-stub arm. Phase 2 swaps this for the real
-    // SbxRuntime peer struct without re-touching the ~12 callers of
-    // get_container_runtime().
+    // Phase 2 plan 02-01: the sbx field carries the SbxRuntime peer struct
+    // (CONTEXT.md D-03 Option A, RESEARCH.md recommendation). is_available and
+    // capabilities now route through it; plan 02-02 wires the remaining two
+    // dispatch arms (exec_command, build_create_args).
     pub fn sbx() -> Self {
         Self {
             base: RuntimeBase::SBX,
             kind: RuntimeKind::Sbx,
+            sbx: Some(sbx::SbxRuntime::new()),
         }
     }
 }
@@ -65,15 +75,16 @@ impl Default for ContainerRuntime {
 }
 
 impl ContainerRuntimeInterface for ContainerRuntime {
-    // Sbx short-circuits to false unconditionally (D-05 Phase 1 stub
-    // contract). A binary named `sbx` on PATH cannot be exercised by aoe
-    // during Phase 1; Phase 2 (RT-02) introduces real `which sbx` probing.
-    // The match arm here intentionally does NOT delegate to
-    // self.base.is_available() for Sbx, since base.is_available() runs
-    // `sbx --version` which would return true if the binary is installed.
+    // Phase 2 plan 02-01: Sbx now delegates to the SbxRuntime peer struct's
+    // real PATH probe (Command::new(binary).arg("--version"));
+    // Docker/Podman/AppleContainer continue to use RuntimeBase::is_available.
     fn is_available(&self) -> bool {
         match self.kind {
-            RuntimeKind::Sbx => false,
+            RuntimeKind::Sbx => self
+                .sbx
+                .as_ref()
+                .expect("ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx")
+                .is_available(),
             _ => self.base.is_available(),
         }
     }
@@ -83,7 +94,14 @@ impl ContainerRuntimeInterface for ContainerRuntime {
     }
 
     fn capabilities(&self) -> RuntimeCapabilities {
-        self.base.capabilities
+        match self.kind {
+            RuntimeKind::Sbx => self
+                .sbx
+                .as_ref()
+                .expect("ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx")
+                .capabilities(),
+            _ => self.base.capabilities,
+        }
     }
 
     fn get_version(&self) -> Result<String> {
@@ -497,14 +515,15 @@ mod tests {
         assert_eq!(rt.base.name, "Docker Sandboxes");
     }
 
-    // Phase 1 stub contract per D-05; Phase 2 (RT-02) replaces this with
-    // `which sbx` probing. Until then, is_available must short-circuit to
-    // false regardless of whether the sbx binary is on PATH; a malicious
-    // or stale binary cannot influence aoe's behavior.
+    // Phase 2 plan 02-01: is_available now routes through SbxRuntime's real
+    // PATH probe. The default constructor uses PathBuf::from("sbx"), so the
+    // probe returns false on hosts without a `sbx` binary on PATH. The probe
+    // returning true when sbx IS on PATH is the desired Phase 2 behavior; we
+    // assert "no panic, returns bool" rather than the prior short-circuit.
     #[test]
-    fn test_sbx_is_available_returns_false_unconditionally() {
+    fn test_sbx_is_available_routes_through_sbx_runtime() {
         let rt = ContainerRuntime::sbx();
-        assert!(!rt.is_available());
+        let _ = rt.is_available();
     }
 
     // Mirrors test_docker_capability_matrix shape; honest sbx values per

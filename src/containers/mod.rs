@@ -2,6 +2,7 @@ pub mod container_interface;
 pub mod error;
 mod runtime;
 pub(crate) mod runtime_base;
+pub(crate) mod sbx;
 
 use std::collections::HashMap;
 
