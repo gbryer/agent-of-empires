@@ -49,12 +49,46 @@ pub struct ContainerConfig {
     pub port_mappings: Vec<String>,
 }
 
+/// Declarative capability matrix for a container runtime.
+///
+/// Every backend literal MUST initialize every field by name; `..Default::default()`
+/// is forbidden so that adding an eighth flag fails the build on every const literal
+/// until each backend declares an honest value. That compile-time exhaustiveness is
+/// what lets new flags fan out without silently producing broken output for any
+/// backend that forgot to opt in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuntimeCapabilities {
+    /// Whether this runtime honors `:ro` on volume mounts.
+    pub supports_read_only_volumes: bool,
+    /// Whether this runtime accepts `-v` on the remove subcommand to clean up
+    /// anonymous volumes alongside the container.
+    pub supports_remove_volumes: bool,
+    /// Whether this runtime publishes host ports at container-create time via `-p`.
+    pub supports_port_publish_at_create: bool,
+    /// Whether this runtime exposes an image-pull verb (e.g., `pull`) that
+    /// downloads a remote image into local storage.
+    pub supports_image_pull: bool,
+    /// Whether this runtime honors `-v PATH` without a host-side counterpart
+    /// (anonymous volumes for caches, etc.).
+    pub supports_anonymous_volumes: bool,
+    /// Whether this runtime accepts any `HOST:CONTAINER` pairing for bind mounts,
+    /// as opposed to requiring the host path and container path to match.
+    pub supports_arbitrary_volume_paths: bool,
+    /// Whether this runtime can publish ports after the container has been
+    /// created, without recreate/restart workarounds.
+    pub supports_dynamic_port_publish: bool,
+}
+
 pub trait ContainerRuntimeInterface {
     /// Check if the container runtime CLI is available
     fn is_available(&self) -> bool;
 
     /// Check if the container runtime daemon is running
     fn is_daemon_running(&self) -> bool;
+
+    /// Return the runtime's declared capability matrix. Pure data accessor; no
+    /// subprocess calls. Consumers gate behavior on individual flags.
+    fn capabilities(&self) -> RuntimeCapabilities;
 
     /// Get the container runtime version string
     fn get_version(&self) -> Result<String>;
