@@ -146,8 +146,11 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 Ok(output.status.success())
             }
             RuntimeKind::Sbx => {
-                // Phase 1 stub; no sbx container can exist while is_available
-                // returns false. Phase 2 (RT-04) replaces with `sbx inspect`.
+                // Safe Phase 1 stub per CONTEXT.md D-05/D-06; the action
+                // verbs are deferred to Phase 5 which wires them via real
+                // `sbx ls` / `sbx inspect` subprocess calls. is_available
+                // now does a real PATH probe (02-01), so callers that
+                // bypass the availability gate still get a sane answer.
                 let _ = name;
                 Ok(false)
             }
@@ -187,9 +190,10 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 }
             }
             RuntimeKind::Sbx => {
-                // Phase 1 stub; no sbx container can be running while
-                // is_available returns false. Phase 2 (RT-04) replaces with
-                // sbx's running-state probe.
+                // Safe Phase 1 stub per CONTEXT.md D-05/D-06; Phase 5
+                // replaces with sbx's running-state probe. is_available
+                // does a real probe now (02-01), so this arm is reachable
+                // and must return a defined answer rather than panic.
                 let _ = name;
                 Ok(false)
             }
@@ -332,10 +336,10 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 HashMap::new()
             }
             RuntimeKind::Sbx => {
-                // Phase 1 stub; no sbx containers can exist while
-                // is_available returns false, so the running-states map is
-                // always empty. Phase 2 (RT-04) replaces with the real
-                // `sbx ls` parse.
+                // Safe Phase 1 stub per CONTEXT.md D-05/D-06; Phase 5
+                // replaces with the real `sbx ls` parse. The empty map
+                // is the right answer for callers that reach here before
+                // the action verbs are wired.
                 let _ = prefix;
                 HashMap::new()
             }
