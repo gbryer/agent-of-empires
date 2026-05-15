@@ -1271,6 +1271,18 @@ impl Instance {
             .sandbox_info
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("sandbox_info missing for sandboxed session"))?;
+        // Capabilities and runtime_name drive the end-of-function conformance
+        // post-pass inside container_config::build_container_config. The
+        // resolved runtime is the one returned by containers::get_container_runtime;
+        // its capability matrix lives on the same struct. Plan 03-02 refines the
+        // accessor pattern (replaces the Config::load + match below with a direct
+        // runtime.name() method) and threads capabilities through container_workdir
+        // for the exec-time consumers; this passthrough is the minimum delta that
+        // keeps the build green at Plan 03-01's wave boundary.
+        let runtime = crate::containers::get_container_runtime();
+        let runtime_name = crate::session::Config::load()
+            .map(|c| c.sandbox.container_runtime)
+            .unwrap_or_default();
         container_config::build_container_config(
             &self.project_path,
             sandbox,
@@ -1279,6 +1291,8 @@ impl Instance {
             &self.id,
             self.workspace_info.as_ref(),
             &self.source_profile,
+            runtime.capabilities(),
+            runtime_name,
         )
     }
 

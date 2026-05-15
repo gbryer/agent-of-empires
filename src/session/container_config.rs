@@ -7,12 +7,92 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use thiserror::Error;
 
-use crate::containers::{ContainerConfig, EnvEntry, VolumeMount};
+use crate::containers::{ContainerConfig, EnvEntry, RuntimeCapabilities, VolumeMount};
 use crate::git::GitWorktree;
+use crate::session::config::ContainerRuntimeName;
 
 use super::environment::collect_environment;
 use super::instance::SandboxInfo;
+
+/// Validation failures `build_container_config` surfaces to callers when the
+/// resolved runtime's capability matrix cannot honor the requested mount shape.
+/// Callers receive these via `anyhow::Error::downcast_ref`; `build_container_config`
+/// keeps its `anyhow::Result<ContainerConfig>` signature and typed variants slot
+/// in via `.into()`.
+#[derive(Debug, Error)]
+pub enum ContainerConfigError {
+    #[error(
+        "extra_volume `{entry}` cannot conform to host_path == container_path \
+         under runtime {runtime:?}; {reason}. Fix: use `<host>:<host>` or remove the entry."
+    )]
+    InconformableExtraVolume {
+        entry: String,
+        runtime: ContainerRuntimeName,
+        reason: String,
+    },
+}
+
+/// Rewrite workspace `VolumeMount`s and `working_dir` so every surviving mount
+/// satisfies `host_path == container_path`, for runtimes whose capability matrix
+/// declares `!supports_arbitrary_volume_paths` (sbx). Capability-blind otherwise:
+/// when `caps.supports_arbitrary_volume_paths == true` the inputs pass through
+/// unchanged. Uses longest-prefix-match (not `String::replace`) so the bare-repo
+/// worktree subdirectory case and sibling-worktree case both resolve to the
+/// correct host prefix.
+///
+/// Called from two places that must agree on the resulting workdir:
+///   - `build_container_config`'s end-of-function post-pass (mount-time).
+///   - `Instance::container_workdir` (exec-time, fed to `sbx exec -w`).
+pub(crate) fn conform_workspace_paths(
+    volumes: Vec<VolumeMount>,
+    working_dir: String,
+    caps: RuntimeCapabilities,
+) -> (Vec<VolumeMount>, String) {
+    if caps.supports_arbitrary_volume_paths {
+        return (volumes, working_dir);
+    }
+
+    // Build the (old_container_prefix, new_host_prefix) pairs BEFORE moving the
+    // volumes into the rewritten Vec. Longest-prefix-first so a subdirectory
+    // workdir resolves to the volume whose container_path is the deepest match,
+    // not whichever volume happens to be iterated first.
+    let mut prefix_pairs: Vec<(String, String)> = volumes
+        .iter()
+        .map(|v| (v.container_path.clone(), v.host_path.clone()))
+        .collect();
+    prefix_pairs.sort_by_key(|pair| std::cmp::Reverse(pair.0.len()));
+
+    let conformed_volumes: Vec<VolumeMount> = volumes
+        .into_iter()
+        .map(|v| VolumeMount {
+            container_path: v.host_path.clone(),
+            host_path: v.host_path,
+            read_only: v.read_only,
+        })
+        .collect();
+
+    let conformed_workdir = rewrite_workdir(&working_dir, &prefix_pairs);
+
+    (conformed_volumes, conformed_workdir)
+}
+
+/// Longest-prefix-match workdir rewrite: find a pair where `working_dir` either
+/// equals `old_prefix` or starts with `old_prefix + '/'`, then swap prefixes,
+/// preserving any trailing suffix. Returns the input unchanged if no pair matches.
+fn rewrite_workdir(working_dir: &str, prefix_pairs: &[(String, String)]) -> String {
+    for (old_prefix, new_prefix) in prefix_pairs {
+        if working_dir == old_prefix {
+            return new_prefix.clone();
+        }
+        let prefix_with_sep = format!("{}/", old_prefix);
+        if let Some(suffix) = working_dir.strip_prefix(&prefix_with_sep) {
+            return format!("{}/{}", new_prefix, suffix);
+        }
+    }
+    working_dir.to_string()
+}
 
 /// Subdirectory name inside each agent's config dir for the shared sandbox config.
 const SANDBOX_SUBDIR: &str = "sandbox";
@@ -822,6 +902,18 @@ pub(crate) fn refresh_agent_configs() {
 /// `profile` selects which profile's overrides (volumes, mount_ssh, volume_ignores)
 /// are merged on top of the global config. An empty `profile` falls back to the
 /// user's globally configured default profile.
+///
+/// `capabilities` + `runtime_name` drive an end-of-function post-pass that
+/// conforms the result to the resolved runtime's volume-path constraints. For
+/// runtimes whose matrix declares `supports_arbitrary_volume_paths == true`
+/// (Docker, Podman, Apple Container) the post-pass is a no-op and the returned
+/// config is byte-identical to the pre-conformance shape. For sbx
+/// (`supports_arbitrary_volume_paths == false`) the workspace mount and
+/// `working_dir` are rewritten to satisfy `host_path == container_path`,
+/// convenience mounts that cannot conform are dropped, and user-declared
+/// `extra_volumes` with `host_path != container_path` surface a typed
+/// `ContainerConfigError::InconformableExtraVolume` via the anyhow channel.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_container_config(
     project_path_str: &str,
     sandbox_info: &SandboxInfo,
@@ -830,6 +922,8 @@ pub(crate) fn build_container_config(
     instance_id: &str,
     workspace_info: Option<&super::WorkspaceInfo>,
     profile: &str,
+    capabilities: RuntimeCapabilities,
+    runtime_name: ContainerRuntimeName,
 ) -> Result<ContainerConfig> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
 
@@ -1122,7 +1216,7 @@ pub(crate) fn build_container_config(
     }
     deduped.reverse();
 
-    Ok(ContainerConfig {
+    let config = ContainerConfig {
         working_dir: workspace_path,
         volumes: deduped,
         anonymous_volumes,
@@ -1130,7 +1224,84 @@ pub(crate) fn build_container_config(
         cpu_limit: sandbox_config.cpu_limit,
         memory_limit: sandbox_config.memory_limit,
         port_mappings: sandbox_config.port_mappings.clone(),
-    })
+    };
+
+    conform_for_capabilities(
+        config,
+        capabilities,
+        runtime_name,
+        &sandbox_config.extra_volumes,
+    )
+}
+
+/// End-of-function capability-driven post-pass on a `ContainerConfig`. For
+/// runtimes that accept any `HOST:CONTAINER` pairing the function early-returns
+/// unchanged (true no-op; preserves Docker/Podman/AppleContainer baseline). For
+/// `!supports_arbitrary_volume_paths` runtimes (sbx):
+///   1. Validates user-declared `extra_volumes`: any entry with
+///      `host_path != container_path` returns a typed
+///      `ContainerConfigError::InconformableExtraVolume`.
+///   2. Rewrites every workspace `VolumeMount.container_path` to its host_path
+///      via the shared `conform_workspace_paths` helper.
+///   3. Drops any surviving mount whose `container_path` still differs from its
+///      `host_path` (convenience mounts: gitconfig, SSH, GCP creds, agent
+///      config, home-seed files). Logged at `tracing::debug!` per CONTEXT D-04.
+///   4. Clears `anonymous_volumes` when `!supports_anonymous_volumes` because
+///      their stored strings reference the pre-conformance container paths and
+///      would mislead downstream consumers.
+///
+/// Owned-passthrough shape (not `&mut`) keeps the call site a single line and
+/// avoids `std::mem::take` gymnastics around moving `config.volumes`.
+fn conform_for_capabilities(
+    mut config: ContainerConfig,
+    caps: RuntimeCapabilities,
+    runtime_name: ContainerRuntimeName,
+    extra_volumes: &[String],
+) -> Result<ContainerConfig> {
+    if caps.supports_arbitrary_volume_paths {
+        return Ok(config);
+    }
+
+    // Validate user-declared extra_volumes BEFORE mutating anything. Malformed
+    // entries (`parts.len() < 2`) are already filtered + logged at the push
+    // site above; re-warning here would double-log. Only entries with parsed
+    // host:container where host != container trigger the typed error.
+    for entry in extra_volumes {
+        let parts: Vec<&str> = entry.splitn(3, ':').collect();
+        if parts.len() >= 2 && parts[0] != parts[1] {
+            return Err(ContainerConfigError::InconformableExtraVolume {
+                entry: entry.clone(),
+                runtime: runtime_name,
+                reason: "requires host_path == container_path".to_string(),
+            }
+            .into());
+        }
+    }
+
+    let (conformed_volumes, conformed_workdir) =
+        conform_workspace_paths(config.volumes, config.working_dir, caps);
+    config.volumes = conformed_volumes;
+    config.working_dir = conformed_workdir;
+
+    config.volumes.retain(|v| {
+        let keep = v.container_path == v.host_path;
+        if !keep {
+            tracing::debug!(
+                target: "containers.config",
+                runtime = ?runtime_name,
+                host = %v.host_path,
+                container = %v.container_path,
+                "dropping mount (!supports_arbitrary_volume_paths)"
+            );
+        }
+        keep
+    });
+
+    if !caps.supports_anonymous_volumes {
+        config.anonymous_volumes.clear();
+    }
+
+    Ok(config)
 }
 
 /// Find the longest common ancestor path of two absolute paths.
@@ -2341,6 +2512,8 @@ extra_volumes = ["/host/data:/container/data:ro"]
             "test-instance-id",
             None,
             "",
+            crate::containers::runtime_base::RuntimeBase::DOCKER.capabilities,
+            ContainerRuntimeName::Docker,
         )
         .unwrap();
 
@@ -2469,6 +2642,8 @@ extra_volumes = ["/host/personal-only:/container/personal-only:ro"]
             "test-instance-id",
             None,
             "personal",
+            crate::containers::runtime_base::RuntimeBase::DOCKER.capabilities,
+            ContainerRuntimeName::Docker,
         )
         .unwrap();
         assert!(
@@ -2507,6 +2682,8 @@ extra_volumes = ["/host/personal-only:/container/personal-only:ro"]
             "test-instance-id",
             None,
             "default",
+            crate::containers::runtime_base::RuntimeBase::DOCKER.capabilities,
+            ContainerRuntimeName::Docker,
         )
         .unwrap();
         assert!(
@@ -2528,6 +2705,8 @@ extra_volumes = ["/host/personal-only:/container/personal-only:ro"]
             "test-instance-id",
             None,
             "",
+            crate::containers::runtime_base::RuntimeBase::DOCKER.capabilities,
+            ContainerRuntimeName::Docker,
         )
         .unwrap();
         assert!(
@@ -2606,6 +2785,8 @@ volume_ignores = ["target", "node_modules"]
             "test-instance-id",
             None,
             "",
+            crate::containers::runtime_base::RuntimeBase::DOCKER.capabilities,
+            ContainerRuntimeName::Docker,
         )
         .unwrap();
 
@@ -2697,6 +2878,8 @@ volume_ignores = ["target"]
             "test-instance-id",
             None,
             "",
+            crate::containers::runtime_base::RuntimeBase::DOCKER.capabilities,
+            ContainerRuntimeName::Docker,
         )
         .unwrap();
 
@@ -2862,6 +3045,8 @@ volume_ignores = ["target"]
             "test-instance-id",
             None,
             "",
+            crate::containers::runtime_base::RuntimeBase::DOCKER.capabilities,
+            ContainerRuntimeName::Docker,
         )
         .unwrap()
     }
@@ -3010,5 +3195,594 @@ volume_ignores = ["target"]
         );
 
         std::env::remove_var("CLAUDE_CODE_USE_VERTEX");
+    }
+
+    // --- conform_workspace_paths tests (Phase 3 RT-04 helper) ---
+
+    #[test]
+    fn test_conform_workspace_paths_docker_is_identity() {
+        let caps = crate::containers::runtime_base::RuntimeBase::DOCKER.capabilities;
+        let volumes = vec![VolumeMount {
+            host_path: "/home/user/repo".to_string(),
+            container_path: "/workspace/repo".to_string(),
+            read_only: false,
+        }];
+        let working_dir = "/workspace/repo".to_string();
+
+        let (out_volumes, out_workdir) =
+            conform_workspace_paths(volumes, working_dir.clone(), caps);
+
+        assert_eq!(out_volumes.len(), 1);
+        assert_eq!(out_volumes[0].host_path, "/home/user/repo");
+        assert_eq!(out_volumes[0].container_path, "/workspace/repo");
+        assert_eq!(out_workdir, working_dir);
+    }
+
+    #[test]
+    fn test_conform_workspace_paths_sbx_rewrites_container_to_host() {
+        let caps = crate::containers::runtime_base::RuntimeBase::SBX.capabilities;
+        let volumes = vec![VolumeMount {
+            host_path: "/home/user/repo".to_string(),
+            container_path: "/workspace/repo".to_string(),
+            read_only: false,
+        }];
+
+        let (out_volumes, out_workdir) =
+            conform_workspace_paths(volumes, "/workspace/repo".to_string(), caps);
+
+        assert_eq!(out_volumes.len(), 1);
+        assert_eq!(out_volumes[0].host_path, "/home/user/repo");
+        assert_eq!(out_volumes[0].container_path, "/home/user/repo");
+        assert_eq!(out_workdir, "/home/user/repo");
+    }
+
+    #[test]
+    fn test_conform_workspace_paths_sbx_rewrites_workdir_under_volume_subdir() {
+        // Bare-repo worktree case: volume mounts the repo root but working_dir is
+        // a subdirectory inside the volume. Longest-prefix-match must preserve the
+        // suffix; String::replace would break sibling-worktree cases.
+        let caps = crate::containers::runtime_base::RuntimeBase::SBX.capabilities;
+        let volumes = vec![VolumeMount {
+            host_path: "/path/to/repo".to_string(),
+            container_path: "/workspace/repo".to_string(),
+            read_only: false,
+        }];
+
+        let (out_volumes, out_workdir) =
+            conform_workspace_paths(volumes, "/workspace/repo/main".to_string(), caps);
+
+        assert_eq!(out_volumes[0].container_path, "/path/to/repo");
+        assert_eq!(out_workdir, "/path/to/repo/main");
+    }
+
+    #[test]
+    fn test_conform_workspace_paths_sbx_multiple_volumes_longest_prefix_wins() {
+        // Sibling-worktree case: two volumes both under /workspace/. Workdir must
+        // match the longer of the two prefixes, not the first one iterated.
+        let caps = crate::containers::runtime_base::RuntimeBase::SBX.capabilities;
+        let volumes = vec![
+            VolumeMount {
+                host_path: "/host/short".to_string(),
+                container_path: "/workspace/s".to_string(),
+                read_only: false,
+            },
+            VolumeMount {
+                host_path: "/host/longer".to_string(),
+                container_path: "/workspace/short-but-longer".to_string(),
+                read_only: false,
+            },
+        ];
+
+        let (out_volumes, out_workdir) =
+            conform_workspace_paths(volumes, "/workspace/short-but-longer/sub".to_string(), caps);
+
+        assert_eq!(out_volumes[0].container_path, "/host/short");
+        assert_eq!(out_volumes[1].container_path, "/host/longer");
+        assert_eq!(out_workdir, "/host/longer/sub");
+    }
+
+    #[test]
+    fn test_container_config_error_display_includes_entry_and_runtime() {
+        let err = ContainerConfigError::InconformableExtraVolume {
+            entry: "/x:/y:ro".to_string(),
+            runtime: ContainerRuntimeName::Sbx,
+            reason: "requires host_path == container_path".to_string(),
+        };
+        let rendered = format!("{}", err);
+        assert!(
+            rendered.contains("/x:/y:ro"),
+            "rendered error must include entry; got: {}",
+            rendered
+        );
+        assert!(
+            rendered.contains("Sbx"),
+            "rendered error must include runtime name via Debug; got: {}",
+            rendered
+        );
+    }
+
+    // --- build_container_config capability-gating tests (Phase 3 RT-04 SC-1/2/3) ---
+
+    #[test]
+    #[serial_test::serial]
+    fn test_build_container_config_sbx_conforms_workspace_mount_plain_path() {
+        let temp_home = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp_home.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp_home.path().join(".config"));
+
+        let project_dir = TempDir::new().unwrap();
+        git2::Repository::init(project_dir.path()).unwrap();
+
+        let sandbox_info = build_minimal_sandbox_info();
+        let config = build_container_config(
+            project_dir.path().to_str().unwrap(),
+            &sandbox_info,
+            "claude",
+            false,
+            "test-instance-id",
+            None,
+            "",
+            crate::containers::runtime_base::RuntimeBase::SBX.capabilities,
+            ContainerRuntimeName::Sbx,
+        )
+        .unwrap();
+
+        // Every surviving mount must satisfy host_path == container_path.
+        for v in &config.volumes {
+            assert_eq!(
+                v.host_path, v.container_path,
+                "every surviving mount must be conformant; got host={} container={}",
+                v.host_path, v.container_path
+            );
+        }
+
+        // The primary workspace mount must survive and its host_path equals the
+        // project's canonicalized path.
+        let canonical_project = project_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let workspace_mount = config
+            .volumes
+            .iter()
+            .find(|v| v.host_path == canonical_project)
+            .expect("workspace mount must survive sbx conformance");
+
+        // working_dir must match the workspace mount's host path (also == container_path).
+        assert_eq!(config.working_dir, workspace_mount.host_path);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_build_container_config_sbx_conforms_workspace_mount_path_with_spaces() {
+        let temp_home = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp_home.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp_home.path().join(".config"));
+
+        // Workspace path containing a space exercises any latent quoting/escape
+        // assumptions in the conformance helper.
+        let project_root = TempDir::new().unwrap();
+        let spaced = project_root.path().join("a b c");
+        fs::create_dir_all(&spaced).unwrap();
+        git2::Repository::init(&spaced).unwrap();
+
+        let sandbox_info = build_minimal_sandbox_info();
+        let config = build_container_config(
+            spaced.to_str().unwrap(),
+            &sandbox_info,
+            "claude",
+            false,
+            "test-instance-id",
+            None,
+            "",
+            crate::containers::runtime_base::RuntimeBase::SBX.capabilities,
+            ContainerRuntimeName::Sbx,
+        )
+        .unwrap();
+
+        for v in &config.volumes {
+            assert_eq!(
+                v.host_path, v.container_path,
+                "spaced workspace path must still conform; got host={} container={}",
+                v.host_path, v.container_path
+            );
+        }
+        assert!(config.working_dir.contains("a b c"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_build_container_config_sbx_conforms_bare_repo_worktree() {
+        let temp_home = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp_home.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp_home.path().join(".config"));
+
+        let (_dir, _main_repo_path, worktree_path) = setup_bare_repo_with_worktree();
+        if !worktree_path.exists() {
+            return; // git worktree add unavailable, skip
+        }
+
+        let sandbox_info = build_minimal_sandbox_info();
+        let config = build_container_config(
+            worktree_path.to_str().unwrap(),
+            &sandbox_info,
+            "claude",
+            false,
+            "test-instance-id",
+            None,
+            "",
+            crate::containers::runtime_base::RuntimeBase::SBX.capabilities,
+            ContainerRuntimeName::Sbx,
+        )
+        .unwrap();
+
+        // Every surviving mount must satisfy host_path == container_path.
+        for v in &config.volumes {
+            assert_eq!(
+                v.host_path, v.container_path,
+                "bare-repo case must produce conformant mounts only; got host={} container={}",
+                v.host_path, v.container_path
+            );
+        }
+
+        // working_dir for the bare-repo worktree case must point inside one of
+        // the surviving mounts' host_paths (the workdir is a subdirectory of
+        // the mount root after longest-prefix-match rewrite).
+        let workdir_canon = Path::new(&config.working_dir).to_path_buf();
+        let any_match = config.volumes.iter().any(|v| {
+            workdir_canon == Path::new(&v.host_path) || workdir_canon.starts_with(&v.host_path)
+        });
+        assert!(
+            any_match,
+            "working_dir must live under some surviving mount's host_path; workdir={} volumes={:?}",
+            config.working_dir,
+            config
+                .volumes
+                .iter()
+                .map(|v| v.host_path.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_build_container_config_sbx_conforms_multi_repo_workspace() {
+        // Multi-repo workspace produces multiple volumes; each must be conformed
+        // independently and working_dir must resolve via longest-prefix-match.
+        let temp_home = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp_home.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp_home.path().join(".config"));
+
+        let workspace_root = TempDir::new().unwrap();
+        let repo_a = workspace_root.path().join("repo-a");
+        let repo_b = workspace_root.path().join("repo-b");
+        fs::create_dir_all(&repo_a).unwrap();
+        fs::create_dir_all(&repo_b).unwrap();
+        git2::Repository::init(&repo_a).unwrap();
+        git2::Repository::init(&repo_b).unwrap();
+
+        // WorkspaceInfo expects `repos: Vec<WorkspaceRepo>`. The main_repo_path
+        // values are what compute_workspace_volume_paths reads to emit one
+        // VolumeMount per main repo.
+        let ws_info = crate::session::WorkspaceInfo {
+            branch: "main".to_string(),
+            workspace_dir: workspace_root.path().to_string_lossy().to_string(),
+            repos: vec![
+                crate::session::instance::WorkspaceRepo {
+                    name: "repo-a".to_string(),
+                    source_path: repo_a.to_string_lossy().to_string(),
+                    branch: "main".to_string(),
+                    worktree_path: repo_a.to_string_lossy().to_string(),
+                    main_repo_path: repo_a.to_string_lossy().to_string(),
+                    managed_by_aoe: false,
+                },
+                crate::session::instance::WorkspaceRepo {
+                    name: "repo-b".to_string(),
+                    source_path: repo_b.to_string_lossy().to_string(),
+                    branch: "main".to_string(),
+                    worktree_path: repo_b.to_string_lossy().to_string(),
+                    main_repo_path: repo_b.to_string_lossy().to_string(),
+                    managed_by_aoe: false,
+                },
+            ],
+            created_at: chrono::Utc::now(),
+            cleanup_on_delete: false,
+        };
+
+        let sandbox_info = build_minimal_sandbox_info();
+        let config = build_container_config(
+            workspace_root.path().to_str().unwrap(),
+            &sandbox_info,
+            "claude",
+            false,
+            "test-instance-id",
+            Some(&ws_info),
+            "",
+            crate::containers::runtime_base::RuntimeBase::SBX.capabilities,
+            ContainerRuntimeName::Sbx,
+        )
+        .unwrap();
+
+        for v in &config.volumes {
+            assert_eq!(
+                v.host_path, v.container_path,
+                "multi-repo case must conform every volume; got host={} container={}",
+                v.host_path, v.container_path
+            );
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_build_container_config_docker_baseline_unchanged() {
+        // SC-2: Docker output is byte-identical to pre-Phase-3 (no convenience
+        // mounts are dropped, working_dir keeps the /workspace/<dir> shape).
+        let temp_home = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp_home.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp_home.path().join(".config"));
+
+        let project_dir = TempDir::new().unwrap();
+        git2::Repository::init(project_dir.path()).unwrap();
+
+        let sandbox_info = build_minimal_sandbox_info();
+        let config = build_container_config(
+            project_dir.path().to_str().unwrap(),
+            &sandbox_info,
+            "claude",
+            false,
+            "test-instance-id",
+            None,
+            "",
+            crate::containers::runtime_base::RuntimeBase::DOCKER.capabilities,
+            ContainerRuntimeName::Docker,
+        )
+        .unwrap();
+
+        // working_dir must take the /workspace/<dir> shape (no conformance
+        // rewrite under Docker capability).
+        let dir_name = project_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let expected_wd = format!("/workspace/{}", dir_name);
+        assert_eq!(config.working_dir, expected_wd);
+
+        // Workspace volume keeps host != container shape (canonicalized host
+        // path mapped to /workspace/<dir_name>).
+        let canonical_project = project_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let workspace_vol = config
+            .volumes
+            .iter()
+            .find(|v| v.host_path == canonical_project)
+            .expect("workspace mount must be present under Docker caps");
+        assert_eq!(workspace_vol.container_path, expected_wd);
+
+        // At least one mount with host != container is present (proves the
+        // Docker baseline is NOT being run through the sbx drop pass).
+        let has_distinct_pair = config
+            .volumes
+            .iter()
+            .any(|v| v.host_path != v.container_path);
+        assert!(
+            has_distinct_pair,
+            "Docker baseline must preserve host != container mounts; got: {:?}",
+            config
+                .volumes
+                .iter()
+                .map(|v| (v.host_path.as_str(), v.container_path.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_build_container_config_sbx_inconformable_extra_volume_errors() {
+        // SC-3: user-declared extra_volumes with host != container fails loud
+        // under sbx caps; downcasts to typed ContainerConfigError variant.
+        let temp_home = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp_home.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp_home.path().join(".config"));
+
+        let project_dir = TempDir::new().unwrap();
+        let config_dir = project_dir.path().join(".agent-of-empires");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.toml"),
+            r#"
+[sandbox]
+extra_volumes = ["/host/data:/container/data:ro"]
+"#,
+        )
+        .unwrap();
+        git2::Repository::init(project_dir.path()).unwrap();
+
+        let sandbox_info = build_minimal_sandbox_info();
+        let result = build_container_config(
+            project_dir.path().to_str().unwrap(),
+            &sandbox_info,
+            "claude",
+            false,
+            "test-instance-id",
+            None,
+            "",
+            crate::containers::runtime_base::RuntimeBase::SBX.capabilities,
+            ContainerRuntimeName::Sbx,
+        );
+
+        let err = match result {
+            Ok(_) => panic!("inconformable extra_volume must error under sbx caps"),
+            Err(e) => e,
+        };
+
+        match err.downcast_ref::<ContainerConfigError>() {
+            Some(ContainerConfigError::InconformableExtraVolume { entry, .. }) => {
+                assert_eq!(entry, "/host/data:/container/data:ro");
+            }
+            other => panic!("expected InconformableExtraVolume, got {:?}", other),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_build_container_config_sbx_conformant_extra_volume_passes() {
+        // SC-3 companion: host == container conforms, no error.
+        let temp_home = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp_home.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp_home.path().join(".config"));
+
+        let project_dir = TempDir::new().unwrap();
+        let config_dir = project_dir.path().join(".agent-of-empires");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.toml"),
+            r#"
+[sandbox]
+extra_volumes = ["/host/data:/host/data"]
+"#,
+        )
+        .unwrap();
+        git2::Repository::init(project_dir.path()).unwrap();
+
+        let sandbox_info = build_minimal_sandbox_info();
+        let config = build_container_config(
+            project_dir.path().to_str().unwrap(),
+            &sandbox_info,
+            "claude",
+            false,
+            "test-instance-id",
+            None,
+            "",
+            crate::containers::runtime_base::RuntimeBase::SBX.capabilities,
+            ContainerRuntimeName::Sbx,
+        )
+        .expect("conformant extra_volume must not error under sbx caps");
+
+        // The extra_volume entry must survive the post-pass; it conforms.
+        assert!(
+            config
+                .volumes
+                .iter()
+                .any(|v| v.host_path == "/host/data" && v.container_path == "/host/data"),
+            "conformant extra_volume must appear in config.volumes; got: {:?}",
+            config
+                .volumes
+                .iter()
+                .map(|v| (v.host_path.as_str(), v.container_path.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_build_container_config_docker_inconformable_extra_volume_ok() {
+        // SC-3 companion: under Docker caps the validator is a no-op; an
+        // inconformable extra_volume passes through unchanged.
+        let temp_home = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp_home.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp_home.path().join(".config"));
+
+        let project_dir = TempDir::new().unwrap();
+        let config_dir = project_dir.path().join(".agent-of-empires");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.toml"),
+            r#"
+[sandbox]
+extra_volumes = ["/host/data:/container/data:ro"]
+"#,
+        )
+        .unwrap();
+        git2::Repository::init(project_dir.path()).unwrap();
+
+        let sandbox_info = build_minimal_sandbox_info();
+        let config = build_container_config(
+            project_dir.path().to_str().unwrap(),
+            &sandbox_info,
+            "claude",
+            false,
+            "test-instance-id",
+            None,
+            "",
+            crate::containers::runtime_base::RuntimeBase::DOCKER.capabilities,
+            ContainerRuntimeName::Docker,
+        )
+        .expect("Docker caps must not validate extra_volumes for conformance");
+
+        assert!(
+            config
+                .volumes
+                .iter()
+                .any(|v| v.host_path == "/host/data" && v.container_path == "/container/data"),
+            "Docker caps must preserve host != container shape; got: {:?}",
+            config
+                .volumes
+                .iter()
+                .map(|v| (v.host_path.as_str(), v.container_path.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_build_container_config_sbx_clears_anonymous_volumes() {
+        // anonymous_volumes strings reference pre-conformance container paths
+        // (e.g., /workspace/<repo>/target); they would dangle after sbx
+        // workspace rewrites. The post-pass clears them.
+        let temp_home = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp_home.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp_home.path().join(".config"));
+
+        let project_dir = TempDir::new().unwrap();
+        let config_dir = project_dir.path().join(".agent-of-empires");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.toml"),
+            r#"
+[sandbox]
+volume_ignores = [".venv", "node_modules"]
+"#,
+        )
+        .unwrap();
+        git2::Repository::init(project_dir.path()).unwrap();
+
+        let sandbox_info = build_minimal_sandbox_info();
+        let config = build_container_config(
+            project_dir.path().to_str().unwrap(),
+            &sandbox_info,
+            "claude",
+            false,
+            "test-instance-id",
+            None,
+            "",
+            crate::containers::runtime_base::RuntimeBase::SBX.capabilities,
+            ContainerRuntimeName::Sbx,
+        )
+        .unwrap();
+
+        assert!(
+            config.anonymous_volumes.is_empty(),
+            "sbx caps (!supports_anonymous_volumes) must clear anonymous_volumes; got: {:?}",
+            config.anonymous_volumes
+        );
     }
 }
