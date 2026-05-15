@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use super::container_interface::{ContainerConfig, ContainerRuntimeInterface};
+use super::container_interface::{ContainerConfig, ContainerRuntimeInterface, RuntimeCapabilities};
 use super::error::{DockerError, Result};
 use super::runtime_base::RuntimeBase;
 
@@ -59,6 +59,10 @@ impl ContainerRuntimeInterface for ContainerRuntime {
 
     fn is_daemon_running(&self) -> bool {
         self.base.is_daemon_running()
+    }
+
+    fn capabilities(&self) -> RuntimeCapabilities {
+        self.base.capabilities
     }
 
     fn get_version(&self) -> Result<String> {
@@ -356,8 +360,8 @@ mod tests {
         // set the shared base relies on. If this regresses, the create-args
         // builder will silently produce broken output for podman users.
         let rt = ContainerRuntime::podman();
-        assert!(rt.base.supports_read_only_volumes);
-        assert!(rt.base.supports_remove_volumes);
+        assert!(rt.base.capabilities.supports_read_only_volumes);
+        assert!(rt.base.capabilities.supports_remove_volumes);
         assert_eq!(rt.base.remove_subcommand, "rm");
         assert_eq!(rt.base.pull_prefix, &["pull"]);
     }
@@ -369,5 +373,62 @@ mod tests {
         let rt = ContainerRuntime::podman();
         let cmd = rt.exec_command("aoe-sandbox-test1234", None, "claude");
         assert_eq!(cmd, "podman exec -it aoe-sandbox-test1234 claude");
+    }
+
+    // Per-flag asserts (one per line) so a regression names the offending
+    // capability in the test output. If this regresses, a Docker capability
+    // changed; update RuntimeBase::DOCKER and the consumers that gate on
+    // the affected flag.
+    #[test]
+    fn test_docker_capability_matrix() {
+        let rt = ContainerRuntime::docker();
+        let caps = rt.capabilities();
+        assert!(caps.supports_read_only_volumes);
+        assert!(caps.supports_remove_volumes);
+        assert!(caps.supports_port_publish_at_create);
+        assert!(caps.supports_image_pull);
+        assert!(caps.supports_anonymous_volumes);
+        assert!(caps.supports_arbitrary_volume_paths);
+        assert!(!caps.supports_dynamic_port_publish);
+    }
+
+    // Podman is a Docker drop-in; if this diverges from
+    // test_docker_capability_matrix, either Podman gained a real
+    // differentiator or someone broke the drop-in promise.
+    #[test]
+    fn test_podman_capability_matrix() {
+        let rt = ContainerRuntime::podman();
+        let caps = rt.capabilities();
+        assert!(caps.supports_read_only_volumes);
+        assert!(caps.supports_remove_volumes);
+        assert!(caps.supports_port_publish_at_create);
+        assert!(caps.supports_image_pull);
+        assert!(caps.supports_anonymous_volumes);
+        assert!(caps.supports_arbitrary_volume_paths);
+        assert!(!caps.supports_dynamic_port_publish);
+    }
+
+    // Apple Container diverges from Docker on read_only and remove flags;
+    // gating preserves existing semantics until upstream support lands.
+    #[test]
+    fn test_apple_container_capability_matrix() {
+        let rt = ContainerRuntime::apple_container();
+        let caps = rt.capabilities();
+        assert!(!caps.supports_read_only_volumes);
+        assert!(!caps.supports_remove_volumes);
+        assert!(caps.supports_port_publish_at_create);
+        assert!(caps.supports_image_pull);
+        assert!(caps.supports_anonymous_volumes);
+        assert!(caps.supports_arbitrary_volume_paths);
+        assert!(!caps.supports_dynamic_port_publish);
+    }
+
+    // The trait method must be a pure accessor over self.base.capabilities;
+    // no kind-switching, no mutation. Proves RuntimeCapabilities: Copy + PartialEq
+    // is wired correctly.
+    #[test]
+    fn test_capabilities_method_routes_through_base() {
+        let rt = ContainerRuntime::docker();
+        assert_eq!(rt.capabilities(), rt.base.capabilities);
     }
 }

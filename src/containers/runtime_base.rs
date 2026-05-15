@@ -1,4 +1,4 @@
-use super::container_interface::{ContainerConfig, EnvEntry};
+use super::container_interface::{ContainerConfig, EnvEntry, RuntimeCapabilities};
 use super::error::{DockerError, Result};
 use std::process::Command;
 
@@ -19,10 +19,10 @@ pub(crate) struct RuntimeBase {
     pub pull_prefix: &'static [&'static str],
     /// Subcommand for removing containers (e.g., "rm" or "delete")
     pub remove_subcommand: &'static str,
-    /// Whether this runtime supports the `:ro` read-only volume flag
-    pub supports_read_only_volumes: bool,
-    /// Whether this runtime supports `-v` on remove to clean up anonymous volumes
-    pub supports_remove_volumes: bool,
+    /// Declarative capability matrix for this backend; every flag must be set
+    /// explicitly in each const literal (no default-fill shortcuts), so that
+    /// adding a flag fails the build on every backend until each opts in.
+    pub capabilities: RuntimeCapabilities,
 }
 
 impl RuntimeBase {
@@ -32,8 +32,17 @@ impl RuntimeBase {
         daemon_check_args: &["info"],
         pull_prefix: &["pull"],
         remove_subcommand: "rm",
-        supports_read_only_volumes: true,
-        supports_remove_volumes: true,
+        capabilities: RuntimeCapabilities {
+            supports_read_only_volumes: true,
+            supports_remove_volumes: true,
+            supports_port_publish_at_create: true,
+            supports_image_pull: true,
+            supports_anonymous_volumes: true,
+            supports_arbitrary_volume_paths: true,
+            // Docker requires `-p` at run time; post-create publish needs
+            // recreate or `--network=host` workarounds.
+            supports_dynamic_port_publish: false,
+        },
     };
 
     pub const APPLE_CONTAINER: Self = Self {
@@ -42,8 +51,20 @@ impl RuntimeBase {
         daemon_check_args: &["system", "status"],
         pull_prefix: &["image", "pull"],
         remove_subcommand: "delete",
-        supports_read_only_volumes: false,
-        supports_remove_volumes: false,
+        capabilities: RuntimeCapabilities {
+            // Apple Container ignores `:ro` on bind mounts today; gating preserves
+            // existing semantics until upstream support lands.
+            supports_read_only_volumes: false,
+            supports_remove_volumes: false,
+            supports_port_publish_at_create: true,
+            supports_image_pull: true,
+            // Anonymous volumes (`-v PATH`) flow through `build_create_args` for
+            // every backend without gating; declared true to match observed
+            // behavior, will flip if Phase 3 finds otherwise.
+            supports_anonymous_volumes: true,
+            supports_arbitrary_volume_paths: true,
+            supports_dynamic_port_publish: false,
+        },
     };
 
     pub const PODMAN: Self = Self {
@@ -55,8 +76,17 @@ impl RuntimeBase {
         daemon_check_args: &["info"],
         pull_prefix: &["pull"],
         remove_subcommand: "rm",
-        supports_read_only_volumes: true,
-        supports_remove_volumes: true,
+        // Podman is a Docker drop-in; capability matrix is identical. If this
+        // diverges, the test_podman_capability_matrix test catches it.
+        capabilities: RuntimeCapabilities {
+            supports_read_only_volumes: true,
+            supports_remove_volumes: true,
+            supports_port_publish_at_create: true,
+            supports_image_pull: true,
+            supports_anonymous_volumes: true,
+            supports_arbitrary_volume_paths: true,
+            supports_dynamic_port_publish: false,
+        },
     };
 
     pub fn command(&self) -> Command {
@@ -170,14 +200,14 @@ impl RuntimeBase {
         ];
 
         for vol in &config.volumes {
-            if !self.supports_read_only_volumes && vol.read_only {
+            if !self.capabilities.supports_read_only_volumes && vol.read_only {
                 tracing::warn!(
                     "{} does not support read-only volumes, mounting {} read-write",
                     self.name,
                     vol.container_path
                 );
             }
-            let mount = if vol.read_only && self.supports_read_only_volumes {
+            let mount = if vol.read_only && self.capabilities.supports_read_only_volumes {
                 format!("{}:{}:ro", vol.host_path, vol.container_path)
             } else {
                 format!("{}:{}", vol.host_path, vol.container_path)
@@ -293,7 +323,7 @@ impl RuntimeBase {
         if force {
             args.push("-f".to_string());
         }
-        if self.supports_remove_volumes {
+        if self.capabilities.supports_remove_volumes {
             // Remove anonymous volumes with the container to prevent orphaned volume buildup.
             // This does NOT affect named volumes (like auth volumes).
             args.push("-v".to_string());
