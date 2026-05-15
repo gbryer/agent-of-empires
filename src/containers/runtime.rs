@@ -431,4 +431,63 @@ mod tests {
         let rt = ContainerRuntime::docker();
         assert_eq!(rt.capabilities(), rt.base.capabilities);
     }
+
+    #[test]
+    fn test_sbx_runtime_uses_sbx_binary() {
+        let rt = ContainerRuntime::sbx();
+        assert_eq!(rt.kind, RuntimeKind::Sbx);
+        assert_eq!(rt.base.binary, "sbx");
+        assert_eq!(rt.base.name, "Docker Sandboxes");
+    }
+
+    // Phase 1 stub contract per D-05; Phase 2 (RT-02) replaces this with
+    // `which sbx` probing. Until then, is_available must short-circuit to
+    // false regardless of whether the sbx binary is on PATH; a malicious
+    // or stale binary cannot influence aoe's behavior.
+    #[test]
+    fn test_sbx_is_available_returns_false_unconditionally() {
+        let rt = ContainerRuntime::sbx();
+        assert!(!rt.is_available());
+    }
+
+    // Mirrors test_docker_capability_matrix shape; honest sbx values per
+    // CONTEXT.md <specifics> (4 falses, 1 true on the new flags, both
+    // migrated flags false). Phase 2's real SbxRuntime carries the same
+    // matrix into the live impl.
+    #[test]
+    fn test_sbx_capability_matrix() {
+        let rt = ContainerRuntime::sbx();
+        let caps = rt.capabilities();
+        assert!(!caps.supports_read_only_volumes);
+        assert!(!caps.supports_remove_volumes);
+        assert!(!caps.supports_port_publish_at_create);
+        assert!(!caps.supports_image_pull);
+        assert!(!caps.supports_anonymous_volumes);
+        assert!(!caps.supports_arbitrary_volume_paths);
+        assert!(caps.supports_dynamic_port_publish);
+    }
+
+    // The four match-self.kind dispatch sites must each have a safe Sbx
+    // arm. is_available short-circuits to false, so callers never reach
+    // these paths in normal flows; the safety here is defense-in-depth
+    // for any future caller that bypasses the availability gate.
+    #[test]
+    fn test_sbx_dispatch_arms_return_safe_stubs() {
+        let rt = ContainerRuntime::sbx();
+        assert!(!rt.does_container_exist("foo").unwrap());
+        assert!(!rt.is_container_running("foo").unwrap());
+        assert!(rt.batch_running_states("aoe-sandbox-").is_empty());
+        let cmd = rt.exec_command("foo", None, "bar");
+        assert!(cmd.contains("sbx"));
+        assert!(cmd.contains("foo"));
+    }
+
+    // Mirrors test_capabilities_method_routes_through_base for the sbx
+    // backend; proves the trait method routes through the SBX const and
+    // not via kind-switching.
+    #[test]
+    fn test_sbx_capabilities_via_trait_method() {
+        let rt = ContainerRuntime::sbx();
+        assert_eq!(rt.capabilities(), RuntimeBase::SBX.capabilities);
+    }
 }

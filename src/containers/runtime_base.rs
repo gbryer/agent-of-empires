@@ -531,6 +531,23 @@ mod tests {
         assert!(args.contains(&"TERM=xterm".to_string()));
     }
 
+    // Pins the honest sbx capability matrix per CONTEXT.md <specifics>. If any
+    // flag drifts, Phase 2's real SbxRuntime would inherit a wrong value; the
+    // per-field asserts name the offending flag in test output.
+    #[test]
+    fn test_sbx_runtime_base_const() {
+        let base = RuntimeBase::SBX;
+        assert_eq!(base.binary, "sbx");
+        assert_eq!(base.name, "Docker Sandboxes");
+        assert!(!base.capabilities.supports_read_only_volumes);
+        assert!(!base.capabilities.supports_remove_volumes);
+        assert!(!base.capabilities.supports_port_publish_at_create);
+        assert!(!base.capabilities.supports_image_pull);
+        assert!(!base.capabilities.supports_anonymous_volumes);
+        assert!(!base.capabilities.supports_arbitrary_volume_paths);
+        assert!(base.capabilities.supports_dynamic_port_publish);
+    }
+
     #[test]
     fn test_build_create_args_port_mappings() {
         let base = RuntimeBase::DOCKER;
