@@ -238,13 +238,19 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 }
             }
             RuntimeKind::Sbx => {
-                // Addressable string so settings code can format it, but
-                // unreachable in normal flows because is_available returns
-                // false. Phase 2 (RT-04) replaces with the real `sbx exec`
-                // shape.
+                // Phase 1 stub. The real `sbx exec` shape (Phase 2, RT-04)
+                // must include: workdir option, env forwarding, name, and
+                // cmd. The stub deliberately embeds a comment marker so any
+                // accidental leak into a real exec target fails visibly
+                // rather than silently running `sbx exec <name>` without
+                // the required arguments. Unreachable in normal flows
+                // because is_available returns false.
                 let _ = options;
                 let _ = cmd;
-                format!("sbx exec {}", name)
+                format!(
+                    "sbx exec {} /* Phase 1 stub: cmd and options dropped */",
+                    name
+                )
             }
         }
     }
