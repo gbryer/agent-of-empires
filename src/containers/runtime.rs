@@ -556,12 +556,15 @@ mod tests {
         assert!(caps.supports_dynamic_port_publish);
     }
 
-    // The five match-self.kind dispatch sites must each have a safe Sbx
-    // arm. is_available short-circuits to false, so callers never reach
-    // these paths in normal flows; the safety here is defense-in-depth
-    // for any future caller that bypasses the availability gate.
-    // (is_available itself is a sixth match site, tested separately in
-    // test_sbx_is_available_returns_false_unconditionally.)
+    // Post-Phase-2 dispatch shape: is_available, capabilities,
+    // exec_command, and build_create_args route through the SbxRuntime
+    // peer struct + sbx::argv free functions (covered by their own
+    // tests). The three action verbs below (does_container_exist,
+    // is_container_running, batch_running_states) remain as Phase 1
+    // safe-stub arms per CONTEXT.md D-05/D-06; Phase 5 wires them with
+    // real subprocess code. The exec_command assertions here are
+    // discriminating against the Phase 1 sentinel string so the test
+    // proves the rewire happened, not just that "sbx" appears anywhere.
     #[test]
     fn test_sbx_dispatch_arms_return_safe_stubs() {
         let rt = ContainerRuntime::sbx();
@@ -569,8 +572,45 @@ mod tests {
         assert!(!rt.is_container_running("foo").unwrap());
         assert!(rt.batch_running_states("aoe-sandbox-").is_empty());
         let cmd = rt.exec_command("foo", None, "bar");
-        assert!(cmd.contains("sbx"));
+        // Phase 1 sentinel was "sbx exec {} /* Phase 1 stub: cmd and
+        // options dropped */"; the new build_exec_args emits real argv
+        // tokens immediately after "sbx exec ".
+        assert!(cmd.starts_with("sbx exec "));
         assert!(cmd.contains("foo"));
+        // Phase 1 ignored the cmd arg; the rewire now propagates it.
+        assert!(cmd.contains("bar"));
+        // Discriminating: only the Phase 1 sentinel carried this comment.
+        assert!(!cmd.contains("/* Phase 1"));
+        assert!(!cmd.contains("dropped"));
+    }
+
+    // Post-Phase-2 build_create_args dispatch: the RuntimeKind::Sbx arm
+    // routes through sbx::argv::build_create_args, which emits the sbx
+    // CLI shape (`create shell --name N --template I ...`) rather than
+    // the Docker shape (`run -d --name N ...`) that RuntimeBase emits.
+    // This is the contract for SC-4: the dispatch arm picks up the new
+    // peer module without churning the ~12 caller sites of
+    // get_container_runtime().
+    #[test]
+    fn test_sbx_build_create_args_emits_sbx_shape_not_docker_shape() {
+        let rt = ContainerRuntime::sbx();
+        let cfg = ContainerConfig {
+            working_dir: "/workspace".to_string(),
+            volumes: Vec::new(),
+            anonymous_volumes: Vec::new(),
+            environment: Vec::new(),
+            cpu_limit: None,
+            memory_limit: None,
+            port_mappings: Vec::new(),
+        };
+        let args = rt.build_create_args("aoe-sandbox-test", "alpine:latest", &cfg);
+
+        assert_eq!(args[0], "create");
+        assert_eq!(args[1], "shell");
+        assert!(!args.contains(&"run".to_string()));
+        assert!(!args.contains(&"-d".to_string()));
+        assert!(args.contains(&"--template".to_string()));
+        assert!(args.contains(&"alpine:latest".to_string()));
     }
 
     // Mirrors test_capabilities_method_routes_through_base for the sbx
