@@ -4,7 +4,7 @@ use std::process::Command;
 use crate::containers::container_interface::RuntimeCapabilities;
 use crate::containers::runtime_base::RuntimeBase;
 
-pub(crate) mod argv;
+pub mod argv;
 
 /// Peer struct for the Docker Sandboxes (`sbx`) backend. Phase 2 plan 02-01
 /// owns the skeleton: an injectable binary path, an availability probe, and a

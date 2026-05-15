@@ -197,7 +197,17 @@ impl ContainerRuntimeInterface for ContainerRuntime {
     }
 
     fn build_create_args(&self, name: &str, image: &str, config: &ContainerConfig) -> Vec<String> {
-        self.base.build_create_args(name, image, config)
+        match self.kind {
+            RuntimeKind::Sbx => {
+                // Phase 2 plan 02-01: Sbx emits its own argv shape (positional
+                // workspace mounts, --template, no -v/-p), gated away from
+                // RuntimeBase::build_create_args which would emit Docker shape.
+                // kit_path is None until Phase 4's KitMaterializer feeds it
+                // through.
+                sbx::argv::build_create_args(name, image, None, config)
+            }
+            _ => self.base.build_create_args(name, image, config),
+        }
     }
 
     fn create_container(
@@ -256,19 +266,22 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 }
             }
             RuntimeKind::Sbx => {
-                // Phase 1 stub. The real `sbx exec` shape (Phase 2, RT-04)
-                // must include: workdir option, env forwarding, name, and
-                // cmd. The stub deliberately embeds a comment marker so any
-                // accidental leak into a real exec target fails visibly
-                // rather than silently running `sbx exec <name>` without
-                // the required arguments. Unreachable in normal flows
-                // because is_available returns false.
-                let _ = options;
-                let _ = cmd;
-                format!(
-                    "sbx exec {} /* Phase 1 stub: cmd and options dropped */",
-                    name
-                )
+                // Phase 2 plan 02-01: route through sbx::argv::build_exec_args.
+                // Adapter at the dispatch site keeps the builder pure: the
+                // existing trait passes `options: Option<&str>` (e.g.
+                // "-w /workspace") which we parse into a workdir flag; env
+                // entries are not threaded through this entry point (they
+                // flow via the create-time config). Default to interactive
+                // + tty to match the existing Docker/Podman dispatch shape.
+                let workdir = options
+                    .and_then(|o| o.strip_prefix("-w "))
+                    .map(|w| w.trim());
+                let cmd_parts = [cmd];
+                let args = sbx::argv::build_exec_args(name, workdir, &[], true, true, &cmd_parts);
+                std::iter::once("sbx".to_string())
+                    .chain(args)
+                    .collect::<Vec<_>>()
+                    .join(" ")
             }
         }
     }
