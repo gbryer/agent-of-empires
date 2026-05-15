@@ -3785,4 +3785,47 @@ volume_ignores = [".venv", "node_modules"]
             config.anonymous_volumes
         );
     }
+
+    // --- Phase 3 RT-06 SC-4 tests: ensure_image capability gating ---
+    //
+    // Source-substring + matrix-assertion pair is proportional to the two-line
+    // guard in instance.rs. Building a mock runtime to test absence-of-call is
+    // non-trivial (no precedent in the codebase) and isn't justified.
+
+    #[test]
+    fn test_ensure_image_call_site_is_capability_gated() {
+        let src = include_str!("instance.rs");
+        let idx = src
+            .find("runtime.ensure_image(image)")
+            .expect("ensure_image call site must exist in instance.rs");
+        let prefix = &src[idx.saturating_sub(200)..idx];
+        assert!(
+            prefix.contains("supports_image_pull"),
+            "ensure_image call must be gated on supports_image_pull; got prefix: {}",
+            prefix
+        );
+    }
+
+    #[test]
+    fn test_capability_matrices_drive_ensure_image_branch() {
+        use crate::containers::runtime_base::RuntimeBase;
+        assert!(
+            RuntimeBase::DOCKER.capabilities.supports_image_pull,
+            "Docker must report supports_image_pull = true"
+        );
+        assert!(
+            RuntimeBase::PODMAN.capabilities.supports_image_pull,
+            "Podman must report supports_image_pull = true"
+        );
+        assert!(
+            RuntimeBase::APPLE_CONTAINER
+                .capabilities
+                .supports_image_pull,
+            "Apple Container must report supports_image_pull = true"
+        );
+        assert!(
+            !RuntimeBase::SBX.capabilities.supports_image_pull,
+            "sbx must report supports_image_pull = false"
+        );
+    }
 }

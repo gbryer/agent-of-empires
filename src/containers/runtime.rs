@@ -11,6 +11,7 @@ use super::container_interface::{ContainerConfig, ContainerRuntimeInterface, Run
 use super::error::{DockerError, Result};
 use super::runtime_base::RuntimeBase;
 use super::sbx;
+use crate::session::ContainerRuntimeName;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeKind {
@@ -64,6 +65,19 @@ impl ContainerRuntime {
             base: RuntimeBase::SBX,
             kind: RuntimeKind::Sbx,
             sbx: Some(sbx::SbxRuntime::new()),
+        }
+    }
+
+    /// Map the internal `RuntimeKind` discriminant onto the user-facing
+    /// `ContainerRuntimeName` enum used by `Config::sandbox.container_runtime`.
+    /// Lets callers thread the runtime identity into `container_config`
+    /// without round-tripping through `Config::load()` (Phase 3 RT-04).
+    pub fn name(&self) -> ContainerRuntimeName {
+        match self.kind {
+            RuntimeKind::Docker => ContainerRuntimeName::Docker,
+            RuntimeKind::AppleContainer => ContainerRuntimeName::AppleContainer,
+            RuntimeKind::Podman => ContainerRuntimeName::Podman,
+            RuntimeKind::Sbx => ContainerRuntimeName::Sbx,
         }
     }
 }

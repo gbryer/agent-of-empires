@@ -1245,9 +1245,14 @@ impl Instance {
             return Ok(container);
         }
 
-        // Ensure image is available (always pulls to get latest)
+        // Ensure image is available (always pulls to get latest, when supported).
+        // Phase 3 RT-06 (D-12): gate on the runtime's capability matrix; sbx has
+        // no `pull` verb and silently skips. RuntimeBase::ensure_image keeps its
+        // defensive Err(NotSupported) as a safety net for any forgotten gates (D-13).
         let runtime = containers::get_container_runtime();
-        runtime.ensure_image(image)?;
+        if runtime.capabilities().supports_image_pull {
+            runtime.ensure_image(image)?;
+        }
 
         let config = self.build_container_config()?;
         let container_id = container.create(&config)?;
@@ -1272,17 +1277,10 @@ impl Instance {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("sandbox_info missing for sandboxed session"))?;
         // Capabilities and runtime_name drive the end-of-function conformance
-        // post-pass inside container_config::build_container_config. The
-        // resolved runtime is the one returned by containers::get_container_runtime;
-        // its capability matrix lives on the same struct. Plan 03-02 refines the
-        // accessor pattern (replaces the Config::load + match below with a direct
-        // runtime.name() method) and threads capabilities through container_workdir
-        // for the exec-time consumers; this passthrough is the minimum delta that
-        // keeps the build green at Plan 03-01's wave boundary.
-        let runtime = crate::containers::get_container_runtime();
-        let runtime_name = crate::session::Config::load()
-            .map(|c| c.sandbox.container_runtime)
-            .unwrap_or_default();
+        // post-pass inside container_config::build_container_config. Both come
+        // from the resolved runtime; no Config::load round-trip needed now that
+        // ContainerRuntime exposes name() (Phase 3 RT-04).
+        let runtime = containers::get_container_runtime();
         container_config::build_container_config(
             &self.project_path,
             sandbox,
@@ -1292,7 +1290,7 @@ impl Instance {
             self.workspace_info.as_ref(),
             &self.source_profile,
             runtime.capabilities(),
-            runtime_name,
+            runtime.name(),
         )
     }
 
