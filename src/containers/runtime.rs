@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use super::container_interface::{ContainerConfig, ContainerRuntimeInterface};
+use super::container_interface::{ContainerConfig, ContainerRuntimeInterface, RuntimeCapabilities};
 use super::error::{DockerError, Result};
 use super::runtime_base::RuntimeBase;
 
@@ -59,6 +59,10 @@ impl ContainerRuntimeInterface for ContainerRuntime {
 
     fn is_daemon_running(&self) -> bool {
         self.base.is_daemon_running()
+    }
+
+    fn capabilities(&self) -> RuntimeCapabilities {
+        self.base.capabilities
     }
 
     fn get_version(&self) -> Result<String> {
@@ -356,8 +360,8 @@ mod tests {
         // set the shared base relies on. If this regresses, the create-args
         // builder will silently produce broken output for podman users.
         let rt = ContainerRuntime::podman();
-        assert!(rt.base.supports_read_only_volumes);
-        assert!(rt.base.supports_remove_volumes);
+        assert!(rt.base.capabilities.supports_read_only_volumes);
+        assert!(rt.base.capabilities.supports_remove_volumes);
         assert_eq!(rt.base.remove_subcommand, "rm");
         assert_eq!(rt.base.pull_prefix, &["pull"]);
     }
