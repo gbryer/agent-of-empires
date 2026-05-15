@@ -725,7 +725,7 @@ pub struct SandboxConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_instruction: Option<String>,
 
-    /// Container runtime to use for sandboxing (docker, podman, or apple_container)
+    /// Container runtime to use for sandboxing (docker, podman, apple_container, or sbx)
     #[serde(default)]
     pub container_runtime: ContainerRuntimeName,
 }
@@ -738,6 +738,7 @@ pub enum ContainerRuntimeName {
     #[default]
     Docker,
     Podman,
+    Sbx,
 }
 
 impl Default for SandboxConfig {
