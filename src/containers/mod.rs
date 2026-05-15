@@ -166,6 +166,18 @@ mod tests {
         assert!(volume_values.contains(&"/workspace/myproject/node_modules"));
     }
 
+    // Redundant with runtime.rs's test_sbx_runtime_uses_sbx_binary; included
+    // in the mod.rs test module so the factory integration is locally
+    // documented. RuntimeKind is pub from runtime.rs so the sibling import
+    // compiles. Phase 2's real SbxRuntime swap must preserve this property:
+    // a runtime constructed for sbx must still have kind == RuntimeKind::Sbx.
+    #[test]
+    fn test_get_container_runtime_constructs_sbx_when_kind_matches() {
+        use super::runtime::RuntimeKind;
+        let rt = ContainerRuntime::sbx();
+        assert_eq!(rt.kind, RuntimeKind::Sbx);
+    }
+
     #[test]
     fn test_no_anonymous_volumes_when_empty() {
         let container = DockerContainer::new("test1234567890ab", "alpine:latest");
