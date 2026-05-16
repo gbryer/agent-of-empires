@@ -801,16 +801,32 @@ pub(crate) fn compute_volume_paths(
         }
     }
 
-    // Default behavior: mount project_path directly
-    let dir_name = project_path
+    // Default behavior: mount project_path directly.
+    //
+    // Canonicalize the host_path so the mount-time and exec-time paths stay
+    // consistent under symlinks (e.g. /tmp -> /private/tmp on macOS). The git
+    // branches above already canonicalize; this branch previously used the
+    // raw `project_path_str`, which diverged from the canonical form when
+    // sbx conformance rewrote container_path to host_path. Falling back to
+    // the raw string preserves prior behavior if canonicalize fails.
+    let project_canonical = project_path
+        .canonicalize()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| project_path_str.to_string());
+    let dir_name = Path::new(&project_canonical)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
+        .or_else(|| {
+            project_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        })
         .unwrap_or_else(|| "workspace".to_string());
     let workspace_path = format!("/workspace/{}", dir_name);
 
     Ok((
         vec![VolumeMount {
-            host_path: project_path_str.to_string(),
+            host_path: project_canonical,
             container_path: workspace_path.clone(),
             read_only: false,
         }],
@@ -1443,11 +1459,16 @@ mod tests {
         let (volumes, working_dir) = compute_volume_paths(dir.path(), project_path_str).unwrap();
 
         assert_eq!(volumes.len(), 1);
-        // Non-git: mount path should be the project path
-        assert_eq!(
-            volumes[0].host_path,
-            dir.path().to_string_lossy().to_string()
-        );
+        // Non-git: mount path should be the canonicalized project path so
+        // symlink-prefixed temp dirs (e.g. /tmp -> /private/tmp on macOS)
+        // produce the same host_path that build_container_config emits at
+        // mount time.
+        let expected_host = dir
+            .path()
+            .canonicalize()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| dir.path().to_string_lossy().to_string());
+        assert_eq!(volumes[0].host_path, expected_host);
         // Container path and working dir should be the same
         assert_eq!(volumes[0].container_path, working_dir);
     }
