@@ -1,5 +1,7 @@
 //! Setting field definitions and config mapping
 
+use crate::containers::container_interface::RuntimeCapabilities;
+use crate::containers::runtime_base::RuntimeBase;
 use crate::session::{
     validate_check_interval, Config, ContainerRuntimeName, DefaultTerminalMode, ProfileConfig,
     TmuxClipboardMode, TmuxMouseMode, TmuxStatusBarMode,
@@ -159,6 +161,19 @@ fn resolve_optional<T: Clone>(
             let value = profile.or(global);
             (value, has_explicit_override)
         }
+    }
+}
+
+/// Whether a sandbox field should be shown for a runtime with the given capabilities.
+///
+/// Fields tied to volume features that sbx lacks are hidden; everything else
+/// is always applicable. The match is exhaustive over the three gated keys so
+/// that adding a new capability-gated field requires an explicit decision here.
+fn is_field_applicable(key: FieldKey, caps: &RuntimeCapabilities) -> bool {
+    match key {
+        FieldKey::ExtraVolumes | FieldKey::MountSsh => caps.supports_arbitrary_volume_paths,
+        FieldKey::VolumeIgnores => caps.supports_anonymous_volumes,
+        _ => true,
     }
 }
 
@@ -924,6 +939,13 @@ fn build_sandbox_fields(
         sb.and_then(|s| s.container_runtime),
     );
 
+    let caps = match container_runtime {
+        ContainerRuntimeName::Docker => RuntimeBase::DOCKER.capabilities,
+        ContainerRuntimeName::Podman => RuntimeBase::PODMAN.capabilities,
+        ContainerRuntimeName::AppleContainer => RuntimeBase::APPLE_CONTAINER.capabilities,
+        ContainerRuntimeName::Sbx => RuntimeBase::SBX.capabilities,
+    };
+
     let terminal_mode_selected = match default_terminal_mode {
         DefaultTerminalMode::Host => 0,
         DefaultTerminalMode::Container => 1,
@@ -955,7 +977,7 @@ fn build_sandbox_fields(
         "Docker Sandboxes".into(),
     ];
 
-    vec![
+    let mut fields = vec![
         SettingField {
             key: FieldKey::SandboxEnabledByDefault,
             label: "Enabled by Default",
@@ -1118,7 +1140,9 @@ fn build_sandbox_fields(
                 },
             ),
         },
-    ]
+    ];
+    fields.retain(|f| is_field_applicable(f.key, &caps));
+    fields
 }
 
 fn build_tmux_fields(
@@ -2572,5 +2596,123 @@ mod tests {
 
         assert!(field.has_override);
         assert!(matches!(field.value, FieldValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_field_visibility_matches_capabilities() {
+        // Sandbox FieldKeys that are subject to capability gating.
+        let gated_keys = [
+            FieldKey::ExtraVolumes,
+            FieldKey::MountSsh,
+            FieldKey::VolumeIgnores,
+        ];
+
+        // All sandbox FieldKeys (order matches build_sandbox_fields).
+        let all_sandbox_keys = [
+            FieldKey::SandboxEnabledByDefault,
+            FieldKey::DefaultImage,
+            FieldKey::Environment,
+            FieldKey::SandboxAutoCleanup,
+            FieldKey::CpuLimit,
+            FieldKey::MemoryLimit,
+            FieldKey::DefaultTerminalMode,
+            FieldKey::ExtraVolumes,
+            FieldKey::PortMappings,
+            FieldKey::VolumeIgnores,
+            FieldKey::MountSsh,
+            FieldKey::CustomInstruction,
+            FieldKey::ContainerRuntime,
+        ];
+
+        let runtimes: &[(ContainerRuntimeName, RuntimeCapabilities)] = &[
+            (
+                ContainerRuntimeName::Docker,
+                RuntimeBase::DOCKER.capabilities,
+            ),
+            (
+                ContainerRuntimeName::Podman,
+                RuntimeBase::PODMAN.capabilities,
+            ),
+            (
+                ContainerRuntimeName::AppleContainer,
+                RuntimeBase::APPLE_CONTAINER.capabilities,
+            ),
+            (ContainerRuntimeName::Sbx, RuntimeBase::SBX.capabilities),
+        ];
+
+        // Part 1: Predicate-level cross-product.
+        for (name, caps) in runtimes {
+            for key in &all_sandbox_keys {
+                let applicable = is_field_applicable(*key, caps);
+                match name {
+                    ContainerRuntimeName::Docker | ContainerRuntimeName::Podman => {
+                        assert!(applicable, "{:?} should be applicable for {:?}", key, name);
+                    }
+                    ContainerRuntimeName::AppleContainer => {
+                        // AppleContainer supports arbitrary volume paths and anonymous volumes.
+                        assert!(
+                            applicable,
+                            "{:?} should be applicable for AppleContainer",
+                            key
+                        );
+                    }
+                    ContainerRuntimeName::Sbx => {
+                        if gated_keys.contains(key) {
+                            assert!(!applicable, "{:?} should NOT be applicable for Sbx", key);
+                        } else {
+                            assert!(applicable, "{:?} should be applicable for Sbx", key);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Part 2: End-to-end via build_sandbox_fields.
+        let mut global = Config::default();
+        let profile = ProfileConfig::default();
+
+        // Docker: all 13 fields present.
+        global.sandbox.container_runtime = ContainerRuntimeName::Docker;
+        let docker_fields = build_fields_for_category(
+            SettingsCategory::Sandbox,
+            SettingsScope::Global,
+            &global,
+            &profile,
+        );
+        assert_eq!(
+            docker_fields.len(),
+            13,
+            "Docker should have all 13 sandbox fields, got {}",
+            docker_fields.len()
+        );
+        for key in &gated_keys {
+            assert!(
+                docker_fields.iter().any(|f| f.key == *key),
+                "{:?} should be present for Docker",
+                key
+            );
+        }
+
+        // Sbx: 10 fields (13 minus ExtraVolumes, VolumeIgnores, MountSsh).
+        global.sandbox.container_runtime = ContainerRuntimeName::Sbx;
+        let sbx_fields = build_fields_for_category(
+            SettingsCategory::Sandbox,
+            SettingsScope::Global,
+            &global,
+            &profile,
+        );
+        assert_eq!(
+            sbx_fields.len(),
+            10,
+            "Sbx should have 10 sandbox fields, got {}",
+            sbx_fields.len()
+        );
+        for key in &gated_keys {
+            assert!(
+                !sbx_fields.iter().any(|f| f.key == *key),
+                "{:?} should NOT be present for Sbx",
+                key
+            );
+        }
     }
 }
