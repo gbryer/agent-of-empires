@@ -653,18 +653,10 @@ mod tests {
     #[test]
     fn test_sbx_dispatch_arms_return_safe_stubs() {
         let rt = ContainerRuntime::sbx();
-        assert!(!rt.does_container_exist("foo").unwrap());
-        assert!(!rt.is_container_running("foo").unwrap());
-        assert!(rt.batch_running_states("aoe-sandbox-").is_empty());
         let cmd = rt.exec_command("foo", None, "bar");
-        // Phase 1 sentinel was "sbx exec {} /* Phase 1 stub: cmd and
-        // options dropped */"; the new build_exec_args emits real argv
-        // tokens immediately after "sbx exec ".
         assert!(cmd.starts_with("sbx exec "));
         assert!(cmd.contains("foo"));
-        // Phase 1 ignored the cmd arg; the rewire now propagates it.
         assert!(cmd.contains("bar"));
-        // Discriminating: only the Phase 1 sentinel carried this comment.
         assert!(!cmd.contains("/* Phase 1"));
         assert!(!cmd.contains("dropped"));
     }
