@@ -29,15 +29,29 @@ pub fn runtime_binary() -> &'static str {
 }
 
 pub fn get_container_runtime() -> ContainerRuntime {
-    if let Ok(cfg) = Config::load() {
-        match cfg.sandbox.container_runtime {
+    match Config::load() {
+        Ok(cfg) => match cfg.sandbox.container_runtime {
             ContainerRuntimeName::AppleContainer => ContainerRuntime::apple_container(),
             ContainerRuntimeName::Docker => ContainerRuntime::docker(),
             ContainerRuntimeName::Podman => ContainerRuntime::podman(),
             ContainerRuntimeName::Sbx => ContainerRuntime::sbx(),
+        },
+        Err(e) => {
+            // WR-02 stopgap: surface the silent Docker fallback. Background
+            // callers (creation pollers, deletion path) invoke this on every
+            // exec-time workdir resolution; a transient Config::load failure
+            // (e.g. concurrent rewrite, unset HOME) silently routed sbx-
+            // configured users to Docker's `/workspace/<dir>` workdir, which
+            // is not a valid path inside an sbx sandbox.
+            tracing::warn!(
+                target: "containers.runtime",
+                error = %e,
+                "Config::load failed; falling back to default container runtime ({:?}). \
+                 If you configured a non-Docker runtime, exec-time workdirs may resolve incorrectly.",
+                ContainerRuntime::default().name()
+            );
+            ContainerRuntime::default()
         }
-    } else {
-        ContainerRuntime::default()
     }
 }
 
