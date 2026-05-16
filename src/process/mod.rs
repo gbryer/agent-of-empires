@@ -78,8 +78,11 @@ pub fn kill_process_tree(pid: u32) {
     }
 }
 
-/// SIGTERM every pid in reverse order (children first), wait briefly for
-/// graceful shutdown, then SIGKILL anything still alive.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn pid_to_nix(pid: u32) -> Option<Pid> {
+    i32::try_from(pid).ok().map(Pid::from_raw)
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn kill_with_fallback(pids: &[u32]) {
     tracing::debug!(
@@ -89,21 +92,25 @@ fn kill_with_fallback(pids: &[u32]) {
     );
 
     for &p in pids.iter().rev() {
-        tracing::debug!(target: "process.signal", pid = p, signal = "SIGTERM", "sending signal");
-        let _ = kill(Pid::from_raw(p as i32), Signal::SIGTERM);
+        if let Some(nix_pid) = pid_to_nix(p) {
+            tracing::debug!(target: "process.signal", pid = p, signal = "SIGTERM", "sending signal");
+            let _ = kill(nix_pid, Signal::SIGTERM);
+        }
     }
 
     std::thread::sleep(Duration::from_millis(100));
 
     for &p in pids.iter().rev() {
         if process_exists(p) {
-            tracing::warn!(
-                target: "process.reap",
-                pid = p,
-                "pid survived SIGTERM after 100ms; sending SIGKILL"
-            );
-            tracing::info!(target: "process.signal", pid = p, signal = "SIGKILL", "sending signal");
-            let _ = kill(Pid::from_raw(p as i32), Signal::SIGKILL);
+            if let Some(nix_pid) = pid_to_nix(p) {
+                tracing::warn!(
+                    target: "process.reap",
+                    pid = p,
+                    "pid survived SIGTERM after 100ms; sending SIGKILL"
+                );
+                tracing::info!(target: "process.signal", pid = p, signal = "SIGKILL", "sending signal");
+                let _ = kill(nix_pid, Signal::SIGKILL);
+            }
         }
     }
 }
@@ -112,7 +119,10 @@ fn kill_with_fallback(pids: &[u32]) {
 /// EPERM means the process exists but we lack permission (still exists).
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn process_exists(pid: u32) -> bool {
-    match kill(Pid::from_raw(pid as i32), None) {
+    let Some(nix_pid) = pid_to_nix(pid) else {
+        return false;
+    };
+    match kill(nix_pid, None) {
         Ok(()) => true,
         Err(Errno::EPERM) => true,
         Err(_) => false,
@@ -164,7 +174,10 @@ fn signal_process_tree(pid: u32, signal: Signal) {
         "signaling process tree"
     );
     for &p in pids.iter().rev() {
-        if let Err(e) = kill(Pid::from_raw(p as i32), signal) {
+        let Some(nix_pid) = pid_to_nix(p) else {
+            continue;
+        };
+        if let Err(e) = kill(nix_pid, signal) {
             if e != Errno::ESRCH {
                 tracing::debug!(
                     target: "process.signal",

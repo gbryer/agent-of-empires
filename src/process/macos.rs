@@ -178,6 +178,13 @@ pub(super) fn register_wake_handler() {
 
         unsafe {
             let source = IONotificationPortGetRunLoopSource(notify_port);
+            if source.is_null() {
+                tracing::warn!(
+                    target: "process.wake",
+                    "IONotificationPortGetRunLoopSource returned null"
+                );
+                return;
+            }
             let run_loop = CFRunLoopGetCurrent();
             CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
             CFRunLoopRun();
