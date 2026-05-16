@@ -1305,6 +1305,7 @@ fn conform_for_capabilities(
     config.volumes = conformed_volumes;
     config.working_dir = conformed_workdir;
 
+    let mut dropped: Vec<String> = Vec::new();
     config.volumes.retain(|v| {
         let keep = v.container_path == v.host_path;
         if !keep {
@@ -1315,9 +1316,29 @@ fn conform_for_capabilities(
                 container = %v.container_path,
                 "dropping mount (!supports_arbitrary_volume_paths)"
             );
+            // Track the container path so the summary warn! enumerates what
+            // the user lost (gitconfig, SSH, GCP creds, agent config, etc.).
+            dropped.push(v.container_path.clone());
         }
         keep
     });
+
+    // WR-07: convenience mounts that can't conform are silently lost under
+    // sbx. The per-mount debug! is invisible at default log levels and users
+    // hit "git push asks for password" or "agent re-prompts for OAuth" with
+    // no breadcrumb. Emit one user-visible warn! summary so the first
+    // occurrence is observable.
+    if !dropped.is_empty() {
+        tracing::warn!(
+            target: "containers.config",
+            runtime = ?runtime_name,
+            count = dropped.len(),
+            dropped_mounts = ?dropped,
+            "Runtime cannot mount arbitrary host paths; dropped {} convenience mount(s). \
+             Agent credentials (git, SSH, OAuth) may need to be re-authenticated inside the sandbox.",
+            dropped.len()
+        );
+    }
 
     if !caps.supports_anonymous_volumes {
         config.anonymous_volumes.clear();
