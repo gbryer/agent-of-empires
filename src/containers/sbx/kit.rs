@@ -8,9 +8,14 @@
 //! fast-path or harmlessly discard their tmp dir post-rename.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
+
+/// Top-level `aoe-*` cache dirs older than this are removed during the
+/// fire-and-forget GC sweep on cache miss (CONTEXT.md D-14).
+const KIT_GC_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 
 const SPEC_YAML: &str = include_str!("../sbx_kit/spec.yaml");
 const HOOK_SHIM: &str = include_str!("../sbx_kit/hook-shim.sh");
@@ -130,7 +135,100 @@ fn ensure_with_app_dir(app_dir: &Path, agent: &str) -> Result<PathBuf> {
         }
     }
 
+    // Fire-and-forget 30-day stale-dir GC (CONTEXT.md D-14/D-15, RESEARCH
+    // Pitfall 6); runs ONLY on the cache-miss branch reached here. Prefer
+    // the tokio blocking pool when a runtime is current (the production
+    // call path from SbxRuntime::create_container is async); fall back to
+    // std::thread::spawn for sync callers (tests, future direct CLI calls)
+    // so a sweep still runs without forcing a runtime requirement.
+    let gc_root = app_dir.join("sbx-kit");
+    spawn_gc(gc_root);
+
     Ok(target)
+}
+
+fn spawn_gc(gc_root: PathBuf) {
+    let task = move || {
+        if let Err(e) = gc_stale_kit_dirs(&gc_root, KIT_GC_MAX_AGE) {
+            tracing::info!(
+                target: "containers.sbx.kit",
+                error = %e,
+                "stale-kit GC skipped (non-fatal)"
+            );
+        }
+    };
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::task::spawn_blocking(task);
+    } else {
+        std::thread::spawn(task);
+    }
+}
+
+/// Remove top-level `aoe-*` dirs under `root` whose mtime is older than
+/// `max_age`. Skips non-`aoe-` siblings (path-traversal guard, T-04-01-02)
+/// and any `.tmp.`-suffixed dir (mid-rename racer guard). Per-entry failures
+/// log via `tracing::info!` and continue; only a failed `read_dir(root)`
+/// surfaces as an error to the caller.
+fn gc_stale_kit_dirs(root: &Path, max_age: Duration) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !name_str.starts_with("aoe-") {
+            continue;
+        }
+        if name_str.contains(".tmp.") {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::info!(
+                    target: "containers.sbx.kit",
+                    error = %e,
+                    path = %entry.path().display(),
+                    "stale-kit GC: metadata failed (non-fatal)"
+                );
+                continue;
+            }
+        };
+        let mtime = match metadata.modified() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::info!(
+                    target: "containers.sbx.kit",
+                    error = %e,
+                    path = %entry.path().display(),
+                    "stale-kit GC: mtime read failed (non-fatal)"
+                );
+                continue;
+            }
+        };
+        let age = now.duration_since(mtime).unwrap_or(Duration::ZERO);
+        if age <= max_age {
+            continue;
+        }
+        let path = entry.path();
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => tracing::info!(
+                target: "containers.sbx.kit",
+                path = %path.display(),
+                "removed stale kit cache dir"
+            ),
+            Err(e) => tracing::info!(
+                target: "containers.sbx.kit",
+                error = %e,
+                path = %path.display(),
+                "stale-kit GC: remove failed (non-fatal)"
+            ),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -460,5 +558,64 @@ mod tests {
         assert_eq!(args[kit_pos + 1], target.display().to_string());
         assert_eq!(args[tmpl_pos + 1], "alpine:latest");
         assert!(kit_pos < tmpl_pos, "kit must precede template");
+    }
+
+    #[test]
+    fn gc_removes_only_stale_aoe_dirs() {
+        let root_dir = temp_app_dir();
+        let root = root_dir.path();
+        let stale = root.join("aoe-old");
+        let fresh = root.join("aoe-fresh");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::create_dir_all(&fresh).unwrap();
+        // 99 days old > 30 day threshold so the stale dir is removed; fresh
+        // dir keeps its now() mtime.
+        std::fs::File::open(&stale)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(99 * 24 * 3600))
+            .unwrap();
+
+        gc_stale_kit_dirs(root, KIT_GC_MAX_AGE).unwrap();
+
+        assert!(!stale.exists(), "stale aoe-old should have been removed");
+        assert!(fresh.exists(), "fresh aoe-fresh should have survived");
+    }
+
+    #[test]
+    fn gc_refuses_to_delete_non_aoe_siblings() {
+        let root_dir = temp_app_dir();
+        let root = root_dir.path();
+        let not_aoe = root.join("not-aoe-dir");
+        std::fs::create_dir_all(&not_aoe).unwrap();
+        std::fs::File::open(&not_aoe)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(99 * 24 * 3600))
+            .unwrap();
+
+        gc_stale_kit_dirs(root, KIT_GC_MAX_AGE).unwrap();
+
+        assert!(
+            not_aoe.exists(),
+            "non-aoe-prefixed sibling must never be removed (T-04-01-02)"
+        );
+    }
+
+    #[test]
+    fn gc_skips_tmp_suffixed_dirs() {
+        let root_dir = temp_app_dir();
+        let root = root_dir.path();
+        let tmp = root.join("aoe-X.tmp.123.456");
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::File::open(&tmp)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(99 * 24 * 3600))
+            .unwrap();
+
+        gc_stale_kit_dirs(root, KIT_GC_MAX_AGE).unwrap();
+
+        assert!(
+            tmp.exists(),
+            ".tmp.-suffixed mid-rename dir must never be removed (T-04-01-02)"
+        );
     }
 }
