@@ -1,0 +1,14 @@
+{
+  "sandboxes": [
+    {
+      "id": "edacdd7d-61a6-442b-a9a6-d8ccea8903ed",
+      "name": "claude-Lymow-HA",
+      "agent": "claude",
+      "status": "stopped",
+      "socket_path": "/tmp/sboxd-501-sandboxes/docker.sock",
+      "workspaces": [
+        "/Users/gbryer/projects/other/lymow/Lymow-HA"
+      ]
+    }
+  ]
+}
