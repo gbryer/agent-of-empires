@@ -1270,10 +1270,17 @@ impl Instance {
     /// build_container_config's post-pass produced, otherwise the path inside
     /// the sandbox is wrong. Pure function (caps in, String out), mockable.
     pub fn container_workdir(&self, caps: RuntimeCapabilities) -> String {
-        let (volumes, working_dir) = container_config::compute_volume_paths(
-            Path::new(&self.project_path),
-            &self.project_path,
-        )
+        let project_path = Path::new(&self.project_path);
+        // Mirror build_container_config's branching: multi-repo workspace
+        // sessions must route through compute_workspace_volume_paths, otherwise
+        // the exec-time workdir diverges from the mount-time one and every
+        // `docker exec -w <workdir>` / `sbx exec -w <workdir>` lands in the
+        // wrong directory (or fails outright if the path doesn't exist).
+        let (volumes, working_dir) = if let Some(ws_info) = self.workspace_info.as_ref() {
+            container_config::compute_workspace_volume_paths(project_path, ws_info)
+        } else {
+            container_config::compute_volume_paths(project_path, &self.project_path)
+        }
         .unwrap_or_else(|_| (vec![], "/workspace".to_string()));
         let (_, conformed_wd) =
             container_config::conform_workspace_paths(volumes, working_dir, caps);

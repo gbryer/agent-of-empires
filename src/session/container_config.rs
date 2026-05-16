@@ -821,7 +821,7 @@ pub(crate) fn compute_volume_paths(
 ///
 /// We find the common ancestor of all paths (workspace + main repos) and mount each
 /// under `/workspace/` preserving relative structure.
-fn compute_workspace_volume_paths(
+pub(crate) fn compute_workspace_volume_paths(
     workspace_path: &Path,
     ws_info: &super::WorkspaceInfo,
 ) -> Result<(Vec<VolumeMount>, String)> {
@@ -3878,6 +3878,95 @@ volume_ignores = [".venv", "node_modules"]
             docker_workdir.starts_with("/workspace/"),
             "Docker caps must keep the /workspace/... container path; got {}",
             docker_workdir
+        );
+    }
+
+    /// CR-01 regression: `Instance::container_workdir` must dispatch through
+    /// `compute_workspace_volume_paths` when the instance has `workspace_info`
+    /// set. Previously it always called `compute_volume_paths`, producing a
+    /// divergent workdir for multi-repo workspace sessions whose mount-time
+    /// path was built from the common-ancestor layout.
+    #[test]
+    #[serial_test::serial]
+    fn test_instance_container_workdir_dispatches_on_workspace_info() {
+        use crate::containers::runtime_base::RuntimeBase;
+        use crate::session::instance::Instance;
+        use crate::session::WorkspaceInfo;
+        use crate::session::WorkspaceRepo;
+
+        let temp_home = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp_home.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp_home.path().join(".config"));
+
+        // Lay out a workspace with two main repos at known locations so the
+        // common ancestor is the temp root and the workspace mount path is
+        // deterministic.
+        let root = TempDir::new().unwrap();
+        let workspace_dir = root.path().join("ws-multi");
+        std::fs::create_dir_all(&workspace_dir).unwrap();
+        let repo_a = root.path().join("repo-a");
+        let repo_b = root.path().join("repo-b");
+        std::fs::create_dir_all(&repo_a).unwrap();
+        std::fs::create_dir_all(&repo_b).unwrap();
+        git2::Repository::init(&repo_a).unwrap();
+        git2::Repository::init(&repo_b).unwrap();
+
+        // Compute the mount-time workdir directly via the same helper
+        // build_container_config uses, so the assertion is anchored to the
+        // production code path rather than a hard-coded string.
+        let ws_info = WorkspaceInfo {
+            branch: "feature/ws".to_string(),
+            workspace_dir: workspace_dir.to_string_lossy().to_string(),
+            repos: vec![
+                WorkspaceRepo {
+                    name: "a".to_string(),
+                    source_path: repo_a.to_string_lossy().to_string(),
+                    branch: "feature/ws".to_string(),
+                    worktree_path: workspace_dir.join("a").to_string_lossy().to_string(),
+                    main_repo_path: repo_a.to_string_lossy().to_string(),
+                    managed_by_aoe: true,
+                },
+                WorkspaceRepo {
+                    name: "b".to_string(),
+                    source_path: repo_b.to_string_lossy().to_string(),
+                    branch: "feature/ws".to_string(),
+                    worktree_path: workspace_dir.join("b").to_string_lossy().to_string(),
+                    main_repo_path: repo_b.to_string_lossy().to_string(),
+                    managed_by_aoe: true,
+                },
+            ],
+            created_at: chrono::Utc::now(),
+            cleanup_on_delete: true,
+        };
+
+        let (mount_volumes, mount_workdir) =
+            super::compute_workspace_volume_paths(&workspace_dir, &ws_info).unwrap();
+
+        let mut instance = Instance::new("ws-test", workspace_dir.to_str().unwrap());
+        instance.workspace_info = Some(ws_info);
+
+        // Docker caps: exec-time workdir must equal the pre-conformance
+        // workspace mount path that build_container_config produced.
+        let docker_workdir = instance.container_workdir(RuntimeBase::DOCKER.capabilities);
+        assert_eq!(
+            docker_workdir, mount_workdir,
+            "workspace_info-aware dispatch: Docker exec-time workdir must match mount-time; got {} vs {}",
+            docker_workdir, mount_workdir
+        );
+
+        // sbx caps: workdir conforms to the workspace host_path (one of the
+        // mounted volume host_paths whose container_path is the mount_workdir).
+        let sbx_workdir = instance.container_workdir(RuntimeBase::SBX.capabilities);
+        let expected_sbx_host = mount_volumes
+            .iter()
+            .find(|v| v.container_path == mount_workdir)
+            .map(|v| v.host_path.clone())
+            .expect("workspace mount must be present in volumes");
+        assert_eq!(
+            sbx_workdir, expected_sbx_host,
+            "workspace_info-aware dispatch: sbx exec-time workdir must equal the workspace mount host_path; got {} vs {}",
+            sbx_workdir, expected_sbx_host
         );
     }
 }
