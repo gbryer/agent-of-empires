@@ -297,7 +297,7 @@ pub fn perform_deletion(request: &DeletionRequest) -> DeletionResult {
 
     // Stage 6: hook status cleanup
     tracing::debug!(session_id = %request.session_id, stage = "hook_status_cleanup", "perform_deletion: stage");
-    crate::hooks::cleanup_hook_status_dir(&request.instance.id);
+    crate::hooks::cleanup_hook_status_dir_for_instance(&request.instance);
 
     if !errors.is_empty() {
         tracing::debug!(

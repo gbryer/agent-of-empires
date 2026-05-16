@@ -1052,7 +1052,7 @@ impl App {
         };
         let needs_restart = if !exists || pane_dead {
             true
-        } else if crate::hooks::read_hook_status(&instance.id).is_some() {
+        } else if crate::hooks::read_hook_status_for_instance(&instance).is_some() {
             // Hook status is tracking this session; shell detection is unreliable
             false
         } else if instance.has_command_override() {
