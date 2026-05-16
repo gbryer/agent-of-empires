@@ -1,11 +1,11 @@
 schemaVersion: "1"
-kind: agent
+kind: mixin
 name: aoe-agent
 
 commands:
   install:
-    - command: ["sh", "-c", "sh /sbx-kit/install.sh"]
-    - command: ["sh", "-c", "grep -qsE '^\\.aoe-hooks/?$' \"${WORKDIR}/.gitignore\" || printf '\\n.aoe-hooks/\\n' >> \"${WORKDIR}/.gitignore\""]
+    - command: "sh /sbx-kit/install.sh"
+    - command: "grep -qsE '^\\.aoe-hooks/?$' \"${WORKDIR}/.gitignore\" || printf '\\n.aoe-hooks/\\n' >> \"${WORKDIR}/.gitignore\""
   startup:
     - command: ["sh", "-c", "command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1 || command -v opencode >/dev/null 2>&1 || command -v gemini >/dev/null 2>&1 || command -v cursor >/dev/null 2>&1 || command -v droid >/dev/null 2>&1 || command -v pi >/dev/null 2>&1 || command -v qwen >/dev/null 2>&1 || command -v kiro >/dev/null 2>&1 || command -v hermes >/dev/null 2>&1 || (printf 'aoe-agent: no known agent binary on PATH\\n' >&2; exit 1)"]
 
@@ -106,8 +106,8 @@ environment:
     - QWEN_API_KEY
     - DEEPSEEK_API_KEY
 
-# [ASSUMED schema, confirm against a live sbx install before phase exit; see VALIDATION.md row "credentials.sources ssh-agent schema"]
 credentials:
   sources:
     ssh:
-      agent: ssh-agent
+      env:
+        - SSH_AUTH_SOCK

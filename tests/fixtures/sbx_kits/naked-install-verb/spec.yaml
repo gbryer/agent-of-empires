@@ -1,8 +1,8 @@
 schemaVersion: "1"
-kind: agent
+kind: mixin
 name: naked-verb
 commands:
   install:
-    - command: ["sh", "-c", "true"]
+    - command: "true"
   startup:
     - command: ["sh", "-c", "apt-get install -y curl"]

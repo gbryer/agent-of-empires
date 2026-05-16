@@ -1,8 +1,8 @@
 schemaVersion: "1"
-kind: agent
+kind: mixin
 name: guarded-verb
 commands:
   install:
-    - command: ["sh", "-c", "true"]
+    - command: "true"
   startup:
     - command: ["sh", "-c", "command -v curl >/dev/null || apt-get install -y curl"]

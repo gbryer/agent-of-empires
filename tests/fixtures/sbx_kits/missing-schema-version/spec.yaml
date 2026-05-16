@@ -1,6 +1,6 @@
-kind: agent
+kind: mixin
 name: missing-schema
 commands:
   install:
-    - command: ["sh", "-c", "true"]
+    - command: "true"
   startup: []
