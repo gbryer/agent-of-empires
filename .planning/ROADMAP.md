@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Capability Surface and Trait Foundation** - Extend `ContainerRuntimeInterface` with `RuntimeCapabilities`, migrate the existing two flags, add five new flags, register `Sbx` in `ContainerRuntimeName`, and lock platform support (completed 2026-05-15)
 - [x] **Phase 2: SbxRuntime Skeleton and Pure Argv Builders** - Stand up `src/containers/sbx/` with capability constants, pure argv builders for `sbx create` / `exec` / `ports --publish`, and `is_available()`; fully unit-testable without sbx installed (completed 2026-05-15)
-- [ ] **Phase 3: container_config Capability Gating and Workspace Path Conformance** - Rewrite `compute_volume_paths` and `build_container_config` to honor `!supports_arbitrary_volume_paths` (host_path == container_path) and `!supports_image_pull` (skip ensure_image), with a clear validation error for inconformable configs
+- [x] **Phase 3: container_config Capability Gating and Workspace Path Conformance** - Rewrite `compute_volume_paths` and `build_container_config` to honor `!supports_arbitrary_volume_paths` (host_path == container_path) and `!supports_image_pull` (skip ensure_image), with a clear validation error for inconformable configs (completed 2026-05-16)
 - [ ] **Phase 4: Embedded sbx Kit and Materialization** - Author `src/containers/sbx_kit/` (`spec.yaml`, `install.sh`, status-hook shims), embed via stdlib `include_str!`/`include_bytes!`, materialize to a content-hashed cache dir on first use, and CI-validate the spec
 - [ ] **Phase 5: Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish)** - Wire real `sbx` subprocess calls into `create_container` (with readiness probe + first-exec retry), `exec_command`, `stop_container`, `remove`, batch state via `sbx ls --json`, and the post-create `sbx ports --publish` per-port loop
 - [ ] **Phase 6: Settings TUI, Cross-Machine Integration, and Sleep/Wake** - Wire `Sbx` through the settings TUI per AGENTS.md (FieldKey + apply/clear + override merge), gate field visibility on capabilities, verify cockpit/web/cross-machine transparency end-to-end, and scaffold the post-wake clock-resync handler in `src/process/`
@@ -63,7 +63,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 03-01-PLAN.md; Add ContainerConfigError + conform_workspace_paths helper + conform_for_capabilities post-pass; thread capabilities + ContainerRuntimeName into build_container_config; add SC-1/SC-2/SC-3 tests
-- [ ] 03-02-PLAN.md; Add ensure_image capability guard at instance.rs:1249-1250; thread capabilities through Instance::container_workdir + 19 call sites via container_workdir_now helper; add SC-4 source-substring + matrix-assertion + workdir-threading tests
+- [x] 03-02-PLAN.md; Add ensure_image capability guard at instance.rs:1249-1250; thread capabilities through Instance::container_workdir + 19 call sites via container_workdir_now helper; add SC-4 source-substring + matrix-assertion + workdir-threading tests
 
 ### Phase 4: Embedded sbx Kit and Materialization
 **Goal**: A single aoe-authored sbx kit ships embedded in the binary via stdlib `include_str!`/`include_bytes!` (no new crate dep). Source files live at `src/containers/sbx_kit/` (`spec.yaml`, `install.sh`, status-hook shims). The kit is materialized lazily to `<app_dir>/sbx-kit/aoe-<aoe_version>-<spec_hash>/` on first use; cache is content-addressed so `aoe` upgrades or kit content changes pick up new files automatically. Status-hook shims write to a workspace-relative path (`<workspace>/.aoe-hooks/<id>/status`) that crosses the microVM boundary, with a `.gitignore` for `.aoe-hooks/` dropped via the kit. A `cargo xtask check-kit` (or equivalent) CI guard parses and validates the embedded `spec.yaml`.
@@ -123,7 +123,7 @@ Phases execute in numeric order: 1, 2, 3, 4, 5, 6, 7
 |-------|----------------|--------|-----------|
 | 1. Capability Surface and Trait Foundation | 2/2 | Complete   | 2026-05-15 |
 | 2. SbxRuntime Skeleton and Pure Argv Builders | 2/2 | Complete   | 2026-05-15 |
-| 3. container_config Capability Gating and Workspace Path Conformance | 1/2 | In Progress|  |
+| 3. container_config Capability Gating and Workspace Path Conformance | 2/2 | Complete   | 2026-05-16 |
 | 4. Embedded sbx Kit and Materialization | 0/TBD | Not started | - |
 | 5. Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish) | 0/TBD | Not started | - |
 | 6. Settings TUI, Cross-Machine Integration, and Sleep/Wake | 0/TBD | Not started | - |
