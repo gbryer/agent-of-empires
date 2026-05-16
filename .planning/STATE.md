@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 3 context gathered
-last_updated: "2026-05-16T03:04:29.376Z"
+status: ready_to_plan
+stopped_at: Phase 03 complete (2/2) — ready to discuss Phase 4
+last_updated: 2026-05-16T03:10:44.936Z
 last_activity: 2026-05-16
 progress:
   total_phases: 7
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-15)
 
 **Core value:** Picking `sbx` from the container runtime setting must be a true drop-in: every aoe flow that works on Docker today (TUI, web dashboard, cockpit, cross-machine, multi-agent) keeps working transparently on sbx, with sbx-specific quirks (out-of-band port publishing, microVM lifecycle) absorbed inside the runtime layer rather than leaked to the user.
-**Current focus:** Phase 03 — container-config-capability-gating-and-workspace-path-confor
+**Current focus:** Phase 4 — embedded sbx kit and materialization
 
 ## Current Position
 
-Phase: 03 (container-config-capability-gating-and-workspace-path-confor) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
+Phase: 4
+Plan: Not started
+Status: Ready to plan
 Last activity: 2026-05-16
 
 Progress: [██████████] 100%
@@ -36,7 +36,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 2
 - Average duration: n/a
 - Total execution time: 0.0 hours
 
@@ -44,7 +44,7 @@ Progress: [██████████] 100%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 03 | 2 | - | - |
 
 **Recent Trend:**
 
