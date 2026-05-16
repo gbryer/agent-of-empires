@@ -440,37 +440,19 @@ mod tests {
     }
 
     #[test]
-    fn spec_yaml_declares_credentials_sources_ssh_agent() {
+    fn spec_yaml_declares_credentials_sources_ssh_env() {
         let dir = temp_app_dir();
         let target = ensure_with_app_dir(dir.path(), "claude").unwrap();
         let spec_raw = std::fs::read_to_string(target.join("spec.yaml")).unwrap();
         let spec: serde_yaml::Value = serde_yaml::from_str(&spec_raw).unwrap();
-        let sources = spec["credentials"]["sources"]
-            .as_mapping()
-            .expect("credentials.sources must be a mapping");
-        // Walk leaves and assert at least one is the literal "ssh-agent".
-        fn leaf_strings(v: &serde_yaml::Value, out: &mut Vec<String>) {
-            match v {
-                serde_yaml::Value::String(s) => out.push(s.clone()),
-                serde_yaml::Value::Mapping(m) => {
-                    for (_, vv) in m {
-                        leaf_strings(vv, out);
-                    }
-                }
-                serde_yaml::Value::Sequence(seq) => {
-                    for vv in seq {
-                        leaf_strings(vv, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-        let mut leaves = Vec::new();
-        leaf_strings(&serde_yaml::Value::Mapping(sources.clone()), &mut leaves);
+        let env_seq = spec["credentials"]["sources"]["ssh"]["env"]
+            .as_sequence()
+            .expect("credentials.sources.ssh.env must be a sequence");
+        let env_strs: Vec<&str> = env_seq.iter().filter_map(|v| v.as_str()).collect();
         assert!(
-            leaves.iter().any(|s| s == "ssh-agent"),
-            "no ssh-agent leaf in credentials.sources: {:?}",
-            leaves
+            env_strs.contains(&"SSH_AUTH_SOCK"),
+            "SSH_AUTH_SOCK not in credentials.sources.ssh.env: {:?}",
+            env_strs
         );
     }
 
