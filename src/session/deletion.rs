@@ -15,6 +15,11 @@ pub struct DeletionRequest {
     pub delete_branch: bool,
     pub delete_sandbox: bool,
     pub force_delete: bool,
+    /// Caller has already run on_destroy hooks (e.g. CLI runs them attached
+    /// to the terminal so credential prompts work). When true,
+    /// `perform_deletion` skips its detached hook stage.
+    #[doc(hidden)]
+    pub skip_hooks: bool,
 }
 
 #[derive(Debug)]
@@ -42,9 +47,14 @@ pub fn perform_deletion(request: &DeletionRequest) -> DeletionResult {
     );
 
     // Stage 1: on_destroy hooks. The container and worktree are still
-    // alive here so teardown commands have full access.
+    // alive here so teardown commands have full access. `skip_hooks` lets
+    // CLI callers run the hooks attached to the terminal first (so a
+    // credential prompt can still be answered) and then delegate the rest
+    // of the deletion to this shared path without double-running hooks.
     tracing::debug!(session_id = %request.session_id, stage = "on_destroy_hooks", "perform_deletion: stage");
-    run_on_destroy_hooks(&request.instance);
+    if !request.skip_hooks {
+        run_on_destroy_hooks(&request.instance);
+    }
 
     // Stage 2: sever the live agent BEFORE we touch the working tree it
     // may be writing to. Killing the tmux session terminates the user's
@@ -399,6 +409,7 @@ mod tests {
             delete_branch: false,
             delete_sandbox: false,
             force_delete: false,
+            skip_hooks: false,
         };
 
         let result = perform_deletion(&request);
@@ -418,6 +429,7 @@ mod tests {
             delete_branch: false,
             delete_sandbox: false,
             force_delete: false,
+            skip_hooks: false,
         };
 
         let result = perform_deletion(&request);
@@ -438,6 +450,7 @@ mod tests {
             delete_branch: false,
             delete_sandbox: false,
             force_delete: false,
+            skip_hooks: false,
         };
 
         let result = perform_deletion(&request);
@@ -583,6 +596,7 @@ mod tests {
                 delete_branch: false,
                 delete_sandbox: true,
                 force_delete: false,
+                skip_hooks: false,
             };
 
             let stages = run_with_capture(|| {
@@ -689,6 +703,7 @@ mod tests {
                 delete_branch: true,
                 delete_sandbox: false,
                 force_delete: false,
+                skip_hooks: false,
             };
 
             let result = perform_deletion(&request);
@@ -782,6 +797,7 @@ mod tests {
                 delete_branch: false,
                 delete_sandbox: false,
                 force_delete: false,
+                skip_hooks: false,
             };
             let result = perform_deletion(&req_no_force);
             assert!(
@@ -801,6 +817,7 @@ mod tests {
                 delete_branch: true,
                 delete_sandbox: false,
                 force_delete: true,
+                skip_hooks: false,
             };
             let result = perform_deletion(&req_force);
             assert!(
@@ -897,6 +914,7 @@ mod tests {
                 delete_branch: true,
                 delete_sandbox: true,
                 force_delete: false,
+                skip_hooks: false,
             };
 
             // Stage assertions: preclean must not run when dirty.
@@ -964,6 +982,7 @@ mod tests {
                 delete_branch: true,
                 delete_sandbox: false,
                 force_delete: true,
+                skip_hooks: false,
             };
 
             let stages = run_with_capture(|| {
@@ -1000,6 +1019,7 @@ mod tests {
                 delete_branch: false,
                 delete_sandbox: false,
                 force_delete: false,
+                skip_hooks: false,
             };
 
             let stages = run_with_capture(|| {

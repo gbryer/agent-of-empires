@@ -623,6 +623,7 @@ pub async fn delete_session(
             delete_branch: body.delete_branch,
             delete_sandbox: body.delete_sandbox,
             force_delete: body.force_delete,
+            skip_hooks: false,
         })
     })
     .await;
