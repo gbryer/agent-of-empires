@@ -1163,17 +1163,34 @@ pub(crate) fn build_container_config(
     for entry in &sandbox_config.extra_volumes {
         let parts: Vec<&str> = entry.splitn(3, ':').collect();
         if parts.len() >= 2 {
+            // Third segment must be exactly `ro` (read-only) or absent (rw).
+            // Previously any other token (typos like `readonly`, `RO`,
+            // `read-only`) was silently treated as `:rw`, which mounted the
+            // volume read-write under Docker AND passed the sbx conformance
+            // validator (which only checks `parts[0] != parts[1]`).
+            let read_only = match parts.get(2) {
+                None => false,
+                Some(&"ro") => true,
+                Some(other) => {
+                    tracing::warn!(
+                        "extra_volume `{}`: unknown mode `{}`; expected `ro` or no third segment. Treating as rw.",
+                        entry,
+                        other
+                    );
+                    false
+                }
+            };
             tracing::info!(
                 "Mounting extra volume: {} -> {} (ro: {})",
                 parts[0],
                 parts[1],
-                parts.get(2) == Some(&"ro")
+                read_only
             );
             extra_volume_container_paths.insert(parts[1].to_string());
             volumes.push(VolumeMount {
                 host_path: parts[0].to_string(),
                 container_path: parts[1].to_string(),
-                read_only: parts.get(2) == Some(&"ro"),
+                read_only,
             });
         } else {
             tracing::warn!("Ignoring malformed extra_volume entry: {}", entry);
