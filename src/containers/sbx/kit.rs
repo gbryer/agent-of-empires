@@ -1,6 +1,6 @@
 //! Materializer for the single aoe-authored sbx kit (CONTEXT.md D-08..D-13).
 //!
-//! Embeds seven static asset files from `src/containers/sbx_kit/` at compile
+//! Embeds five static asset files from `src/containers/sbx_kit/` at compile
 //! time via stdlib `include_str!`, then materializes a per-agent kit dir on
 //! first sbx session via atomic-rename. The cache path encodes
 //! `aoe-<CARGO_PKG_VERSION>-<sha256-prefix>` so a kit-bytes flip lands in a
@@ -18,8 +18,6 @@ use sha2::{Digest, Sha256};
 const KIT_GC_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 
 const SPEC_YAML: &str = include_str!("../sbx_kit/spec.yaml");
-const HOOK_SHIM: &str = include_str!("../sbx_kit/hook-shim.sh");
-const GITIGNORE_AOE_HOOKS: &str = include_str!("../sbx_kit/gitignore-aoe-hooks");
 
 const SETTINGS_CLAUDE: &str = include_str!("../sbx_kit/settings-claude.json");
 const SETTINGS_GEMINI: &str = include_str!("../sbx_kit/settings-gemini.json");
@@ -32,11 +30,8 @@ const SETTINGS_QWEN: &str = include_str!("../sbx_kit/settings-qwen.json");
 const UNSUPPORTED_AGENTS: &[&str] = &["cursor", "copilot", "settl"];
 
 fn embedded_kit_bytes() -> Vec<u8> {
-    let mut buf =
-        Vec::with_capacity(SPEC_YAML.len() + HOOK_SHIM.len() + GITIGNORE_AOE_HOOKS.len() + 4096);
+    let mut buf = Vec::with_capacity(SPEC_YAML.len() + 4096);
     buf.extend_from_slice(SPEC_YAML.as_bytes());
-    buf.extend_from_slice(HOOK_SHIM.as_bytes());
-    buf.extend_from_slice(GITIGNORE_AOE_HOOKS.as_bytes());
     buf.extend_from_slice(SETTINGS_CLAUDE.as_bytes());
     buf.extend_from_slice(SETTINGS_GEMINI.as_bytes());
     buf.extend_from_slice(SETTINGS_CURSOR.as_bytes());
@@ -111,14 +106,6 @@ fn ensure_with_app_dir(app_dir: &Path, agent: &str) -> Result<PathBuf> {
         std::fs::set_permissions(&install_path, std::fs::Permissions::from_mode(0o755))
             .with_context(|| format!("chmod 0o755 {}", install_path.display()))?;
     }
-
-    std::fs::write(tmp.join("hook-shim.sh"), HOOK_SHIM.as_bytes())
-        .with_context(|| format!("write hook-shim.sh in {}", tmp.display()))?;
-    std::fs::write(
-        tmp.join("gitignore-aoe-hooks"),
-        GITIGNORE_AOE_HOOKS.as_bytes(),
-    )
-    .with_context(|| format!("write gitignore-aoe-hooks in {}", tmp.display()))?;
 
     match std::fs::rename(&tmp, &target) {
         Ok(()) => {}
@@ -290,11 +277,6 @@ mod tests {
         let target = ensure_with_app_dir(dir.path(), "claude").unwrap();
         assert!(target.join("spec.yaml").exists(), "spec.yaml missing");
         assert!(target.join("install.sh").exists(), "install.sh missing");
-        assert!(target.join("hook-shim.sh").exists(), "hook-shim.sh missing");
-        assert!(
-            target.join("gitignore-aoe-hooks").exists(),
-            "gitignore-aoe-hooks missing"
-        );
         let install_body = std::fs::read_to_string(target.join("install.sh")).unwrap();
         assert!(
             install_body.contains("npm install -g @anthropic-ai/claude-code"),
