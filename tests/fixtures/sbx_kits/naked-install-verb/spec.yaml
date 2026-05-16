@@ -1,0 +1,8 @@
+schemaVersion: "1"
+kind: agent
+name: naked-verb
+commands:
+  install:
+    - command: ["sh", "-c", "true"]
+  startup:
+    - command: ["sh", "-c", "apt-get install -y curl"]

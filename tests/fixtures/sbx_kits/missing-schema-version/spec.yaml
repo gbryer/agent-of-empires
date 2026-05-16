@@ -1,0 +1,6 @@
+kind: agent
+name: missing-schema
+commands:
+  install:
+    - command: ["sh", "-c", "true"]
+  startup: []
