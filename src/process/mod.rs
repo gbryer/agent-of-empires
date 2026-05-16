@@ -1,7 +1,11 @@
 //! Process utilities for tmux session management
 
+use std::collections::HashSet;
 use std::process::Command;
 use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use nix::errno::Errno;
@@ -171,5 +175,267 @@ fn signal_process_tree(pid: u32, signal: Signal) {
                 );
             }
         }
+    }
+}
+
+/// Register a platform-specific handler that fires after the host wakes from
+/// sleep, resyncing clocks in any aoe-owned sbx sandboxes. No-op on
+/// unsupported platforms.
+pub fn register_wake_handler() {
+    #[cfg(target_os = "linux")]
+    {
+        linux::register_wake_handler();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        macos::register_wake_handler();
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        // No-op on unsupported platforms
+    }
+}
+
+#[derive(Deserialize)]
+struct SbxLsOutput {
+    #[serde(default)]
+    sandboxes: Vec<SbxSandboxEntry>,
+}
+
+#[derive(Deserialize)]
+struct SbxSandboxEntry {
+    #[serde(default)]
+    name: String,
+}
+
+/// Touch the clock in every aoe-owned sbx sandbox older than 5 minutes by
+/// running `sbx exec <name> date`. Prevents HTTPS handshake failures caused
+/// by stale guest clocks after host sleep.
+pub(crate) fn resync_sbx_clocks() {
+    let sbx_names = match Command::new("sbx").args(["ls", "--json"]).output() {
+        Ok(output) if output.status.success() => {
+            match serde_json::from_slice::<SbxLsOutput>(&output.stdout) {
+                Ok(parsed) => parsed
+                    .sandboxes
+                    .into_iter()
+                    .map(|s| s.name)
+                    .collect::<HashSet<String>>(),
+                Err(e) => {
+                    tracing::warn!(target: "process.wake", error = %e, "failed to parse sbx ls output");
+                    return;
+                }
+            }
+        }
+        Ok(output) => {
+            tracing::warn!(
+                target: "process.wake",
+                status = %output.status,
+                "sbx ls returned non-zero exit code"
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(target: "process.wake", error = %e, "failed to run sbx ls");
+            return;
+        }
+    };
+
+    if sbx_names.is_empty() {
+        return;
+    }
+
+    let profiles = match crate::session::list_profiles() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(target: "process.wake", error = %e, "failed to list profiles for wake resync");
+            return;
+        }
+    };
+
+    let threshold = Utc::now() - chrono::Duration::minutes(5);
+    let candidates = collect_resync_candidates(&profiles, &sbx_names, threshold);
+
+    for name in candidates {
+        match Command::new("sbx").args(["exec", &name, "date"]).output() {
+            Ok(output) if output.status.success() => {
+                tracing::info!(target: "process.wake", sandbox = %name, "clock resync successful");
+            }
+            Ok(output) => {
+                tracing::warn!(
+                    target: "process.wake",
+                    sandbox = %name,
+                    status = %output.status,
+                    "clock resync command failed"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "process.wake",
+                    sandbox = %name,
+                    error = %e,
+                    "failed to exec clock resync"
+                );
+            }
+        }
+    }
+}
+
+/// Walk all profiles and collect container names for sandboxed instances that
+/// are older than `threshold` and whose container name appears in `sbx_names`.
+fn collect_resync_candidates(
+    profiles: &[String],
+    sbx_names: &HashSet<String>,
+    threshold: DateTime<Utc>,
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    for profile in profiles {
+        let storage = match crate::session::Storage::new(profile) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    target: "process.wake",
+                    profile = %profile,
+                    error = %e,
+                    "failed to open profile storage"
+                );
+                continue;
+            }
+        };
+
+        let instances = match storage.load() {
+            Ok(i) => i,
+            Err(e) => {
+                tracing::warn!(
+                    target: "process.wake",
+                    profile = %profile,
+                    error = %e,
+                    "failed to load instances"
+                );
+                continue;
+            }
+        };
+
+        for inst in &instances {
+            if !inst.is_sandboxed() {
+                continue;
+            }
+            if inst.created_at >= threshold {
+                continue;
+            }
+            if let Some(info) = &inst.sandbox_info {
+                if sbx_names.contains(&info.container_name) {
+                    candidates.push(info.container_name.clone());
+                }
+            }
+        }
+    }
+
+    candidates
+}
+
+/// Pure filtering logic extracted for unit testing without needing a real sbx
+/// binary. Given a set of instances, sbx sandbox names, and a threshold time,
+/// returns the container names that should be resynced.
+#[cfg(test)]
+fn filter_resync_candidates(
+    instances: &[crate::session::Instance],
+    sbx_names: &HashSet<String>,
+    threshold: DateTime<Utc>,
+) -> Vec<String> {
+    instances
+        .iter()
+        .filter(|inst| inst.is_sandboxed())
+        .filter(|inst| inst.created_at < threshold)
+        .filter_map(|inst| {
+            inst.sandbox_info
+                .as_ref()
+                .filter(|info| sbx_names.contains(&info.container_name))
+                .map(|info| info.container_name.clone())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::{Instance, SandboxInfo};
+    use chrono::TimeZone;
+
+    fn make_instance(container_name: &str, created_at: DateTime<Utc>, sandboxed: bool) -> Instance {
+        let mut inst = Instance::new(container_name, "/tmp/test");
+        inst.created_at = created_at;
+        if sandboxed {
+            inst.sandbox_info = Some(SandboxInfo {
+                enabled: true,
+                container_id: None,
+                image: "test:latest".to_string(),
+                container_name: container_name.to_string(),
+                extra_env: None,
+                custom_instruction: None,
+            });
+        }
+        inst
+    }
+
+    #[test]
+    fn filter_skips_non_sandboxed_instances() {
+        let threshold = Utc::now();
+        let old_time = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let sbx_names: HashSet<String> = ["sbx-test"].iter().map(|s| s.to_string()).collect();
+
+        let instances = vec![make_instance("sbx-test", old_time, false)];
+        let result = filter_resync_candidates(&instances, &sbx_names, threshold);
+        assert!(
+            result.is_empty(),
+            "non-sandboxed instance should be skipped"
+        );
+    }
+
+    #[test]
+    fn filter_skips_recent_instances() {
+        let threshold = Utc::now() - chrono::Duration::minutes(5);
+        let recent_time = Utc::now();
+        let sbx_names: HashSet<String> = ["sbx-recent"].iter().map(|s| s.to_string()).collect();
+
+        let instances = vec![make_instance("sbx-recent", recent_time, true)];
+        let result = filter_resync_candidates(&instances, &sbx_names, threshold);
+        assert!(result.is_empty(), "recent instance should be skipped");
+    }
+
+    #[test]
+    fn filter_skips_instances_not_in_sbx_ls() {
+        let threshold = Utc::now();
+        let old_time = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let sbx_names: HashSet<String> = ["other-sandbox"].iter().map(|s| s.to_string()).collect();
+
+        let instances = vec![make_instance("my-sandbox", old_time, true)];
+        let result = filter_resync_candidates(&instances, &sbx_names, threshold);
+        assert!(
+            result.is_empty(),
+            "instance not in sbx ls should be skipped"
+        );
+    }
+
+    #[test]
+    fn filter_includes_matching_candidates() {
+        let threshold = Utc::now();
+        let old_time = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let sbx_names: HashSet<String> = ["sbx-alpha", "sbx-beta"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let instances = vec![
+            make_instance("sbx-alpha", old_time, true),
+            make_instance("sbx-beta", old_time, true),
+            make_instance("sbx-gamma", old_time, true),
+            make_instance("sbx-delta", Utc::now(), true),
+            make_instance("sbx-alpha", old_time, false),
+        ];
+        let result = filter_resync_candidates(&instances, &sbx_names, threshold);
+        assert_eq!(result, vec!["sbx-alpha", "sbx-beta"]);
     }
 }

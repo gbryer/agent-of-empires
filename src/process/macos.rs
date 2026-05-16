@@ -102,6 +102,89 @@ fn find_process_in_group(pgrp: u32) -> Option<u32> {
     None
 }
 
+/// Spawn a background thread that listens for IOKit power notifications. On
+/// `kIOMessageSystemHasPoweredOn` (host woke from sleep), triggers
+/// `resync_sbx_clocks` to fix stale guest clocks in sbx microVMs.
+pub(super) fn register_wake_handler() {
+    std::thread::spawn(|| {
+        // IOKit FFI types
+        type IONotificationPortRef = *mut std::ffi::c_void;
+        type IOObject = u32;
+        type CFRunLoopSourceRef = *mut std::ffi::c_void;
+        type CFRunLoopRef = *mut std::ffi::c_void;
+        type CFStringRef = *const std::ffi::c_void;
+
+        type IOServiceInterestCallback = extern "C" fn(
+            refcon: *mut std::ffi::c_void,
+            service: IOObject,
+            message_type: u32,
+            message_argument: *mut std::ffi::c_void,
+        );
+
+        #[link(name = "IOKit", kind = "framework")]
+        extern "C" {
+            fn IORegisterForSystemPower(
+                refcon: *mut std::ffi::c_void,
+                the_port_ref: *mut IONotificationPortRef,
+                callback: IOServiceInterestCallback,
+                notifier: *mut IOObject,
+            ) -> IOObject;
+            fn IONotificationPortGetRunLoopSource(
+                notify: IONotificationPortRef,
+            ) -> CFRunLoopSourceRef;
+        }
+
+        #[link(name = "CoreFoundation", kind = "framework")]
+        extern "C" {
+            fn CFRunLoopGetCurrent() -> CFRunLoopRef;
+            fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
+            fn CFRunLoopRun();
+
+            static kCFRunLoopDefaultMode: CFStringRef;
+        }
+
+        extern "C" fn power_callback(
+            _refcon: *mut std::ffi::c_void,
+            _service: IOObject,
+            message_type: u32,
+            _message_argument: *mut std::ffi::c_void,
+        ) {
+            // 0xe0000300 == kIOMessageSystemHasPoweredOn
+            if message_type == 0xe000_0300 {
+                tracing::info!(target: "process.wake", "host woke from sleep; resyncing sbx clocks");
+                super::resync_sbx_clocks();
+            }
+        }
+
+        let mut notify_port: IONotificationPortRef = std::ptr::null_mut();
+        let mut notifier: IOObject = 0;
+
+        let root_port = unsafe {
+            IORegisterForSystemPower(
+                std::ptr::null_mut(),
+                &mut notify_port,
+                power_callback,
+                &mut notifier,
+            )
+        };
+
+        if root_port == 0 {
+            tracing::warn!(
+                target: "process.wake",
+                "Failed to register for IOKit power notifications"
+            );
+            return;
+        }
+
+        unsafe {
+            let source = IONotificationPortGetRunLoopSource(notify_port);
+            let run_loop = CFRunLoopGetCurrent();
+            CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
+            CFRunLoopRun();
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

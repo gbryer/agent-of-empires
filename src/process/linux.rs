@@ -123,6 +123,57 @@ fn parse_stat_field(content: &str, field_idx: usize) -> Option<i64> {
     fields.get(adjusted_idx)?.parse().ok()
 }
 
+/// Spawn a background thread that monitors D-Bus for `PrepareForSleep(false)`
+/// signals from systemd-logind. When detected (host just woke), triggers
+/// `resync_sbx_clocks` to fix stale guest clocks in sbx microVMs.
+pub(super) fn register_wake_handler() {
+    std::thread::spawn(|| {
+        use std::io::BufRead;
+        use std::process::{Command, Stdio};
+
+        let child = Command::new("busctl")
+            .args([
+                "monitor",
+                "--system",
+                "--match",
+                "type='signal',interface='org.freedesktop.login1.Manager',member='PrepareForSleep'",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    target: "process.wake",
+                    error = %e,
+                    "Failed to spawn busctl for wake monitoring"
+                );
+                return;
+            }
+        };
+
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let reader = std::io::BufReader::new(stdout);
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            // PrepareForSleep(false) indicates the system just woke up
+            if line.contains("false") {
+                tracing::info!(target: "process.wake", "host woke from sleep; resyncing sbx clocks");
+                super::resync_sbx_clocks();
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
