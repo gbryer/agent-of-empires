@@ -79,7 +79,7 @@ Plans:
 Plans:
 - [x] 04-01-PLAN.md — Author src/containers/sbx_kit/ embedded assets (spec.yaml + hook-shim.sh + gitignore + per-agent settings.json) and src/containers/sbx/kit.rs KitMaterializer with atomic-rename cache + 30-day GC; covers KIT-01, KIT-02, KIT-03, KIT-05, and the in-VM half of KIT-04
 - [x] 04-02-PLAN.md — Add sbx_hook_status_dir + capability-driven dispatch shim through 7 call sites, plus cargo xtask check-kit subcommand + CI kit job; covers KIT-06 and the host-side half of KIT-04
-- [ ] 04-03-PLAN.md — Gap closure: fix 3 spec.yaml schema errors (kind: mixin, string install commands, env-based SSH credentials) found by sbx kit validate UAT; update linter and fixtures
+- [x] 04-03-PLAN.md — Gap closure: fix 3 spec.yaml schema errors (kind: mixin, string install commands, env-based SSH credentials) found by sbx kit validate UAT; update linter and fixtures
 
 ### Phase 5: Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish)
 **Goal**: `SbxRuntime` calls real `sbx` subprocesses end-to-end. `create_container` invokes `sbx create shell --kit ... --template ... [PATH ...]`, polls `sbx ls --json` for readiness with exponential backoff (max 30s), then runs the per-port `sbx ports SANDBOX --publish` loop with per-port error capture (failures aggregate into `Vec<(port, error)>`, sandbox is NOT rolled back). `exec_command` builds `sbx exec [-i] [-t] [-e] [-w]` with up-to-3-attempt retry on first-exec "sandbox not ready" stderr. `stop_container` runs `sbx stop`; `remove` runs `sbx rm [-f]`; batch state parses `sbx ls --json` with `#[serde(default)]` defensiveness. `is_daemon_running` is a composite probe (`sbx version` + `sbx ls --json` parseable) returning typed `SbxNotConfigured` on auth/policy stderr substrings.
@@ -92,7 +92,10 @@ Plans:
   4. `is_daemon_running` returns typed `SbxNotConfigured(reason)` when stderr matches "not logged in" / "policy not configured" substrings (verified by unit test with mocked stderr); never spawns `sbx login` from inside aoe
   5. The manual-test plan (`.planning/manual-tests/sbx.md` or equivalent) documents the cockpit/web/cross-machine session-creation walkthroughs, sleep/wake clock-drift behavior to validate by hand, and host-side disk-usage growth observation across many sandboxes
   6. `cargo test sbx::parse` passes against a committed `tests/fixtures/sbx_ls.json` snapshot, with every deserializer field annotated `#[serde(default)]`
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 05-01-PLAN.md — Core SbxRuntime action verbs (parse module, ports module, create/exec/stop/rm/daemon health, unit tests)
+- [ ] 05-02-PLAN.md — Dispatch arm replacement, session-layer publish_ports call, integration test, manual test plan
 
 ### Phase 6: Settings TUI, Cross-Machine Integration, and Sleep/Wake
 **Goal**: Users can pick `Sbx` from the runtime dropdown in global Settings, set it as a profile override, and override it per-session; every layer of the existing precedence chain works. Settings fields the resolved runtime cannot honor are visibly gated (greyed out with a footer note), never silently ignored. A cross-product unit test (every FieldKey × every ContainerRuntimeName) asserts editability matches capability declaration. End-to-end TUI / cockpit / web dashboard / cross-machine session creation against an sbx-backed runtime works transparently; no surface gets sbx-specific code paths beyond the runtime layer. Sleep/wake handler scaffolding lives in `src/process/macos.rs` / `src/process/linux.rs` (per AGENTS.md), wired to mark sbx sessions as "potentially clock-drifted" and to attempt a clock-resync via `sbx exec` on resume so HTTPS handshakes don't silently break after macOS sleep.
@@ -105,7 +108,10 @@ Plans:
   4. Creating a sandboxed session through the web dashboard's new-session API with `container_runtime=sbx` succeeds, returns a `Running` status, and the WebSocket PTY relay attaches to the running `sbx exec` process; no sbx-specific branch appears in `src/server/` or `src/cockpit/` (verified by inspection plus a `cargo test --features serve --test web_session_create -- --ignored` integration test)
   5. After a simulated macOS sleep/wake event (or the Linux `org.freedesktop.login1.Manager` `PrepareForSleep` signal in test), the sleep/wake handler in `src/process/macos.rs` / `src/process/linux.rs` invokes a clock-resync `sbx exec sandbox` call against every sbx-backed running session that was alive longer than 5min before sleep (verified by unit test with mocked sleep events)
   6. `cargo test --test e2e sbx_runtime_selector -- --ignored` passes the new TUI / CLI surface coverage: the runtime dropdown shows `Sbx` and `aoe sandbox runtime sbx` (or whatever clap subcommand surfaces) succeeds
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 05-01-PLAN.md — Core SbxRuntime action verbs (parse module, ports module, create/exec/stop/rm/daemon health, unit tests)
+- [ ] 05-02-PLAN.md — Dispatch arm replacement, session-layer publish_ports call, integration test, manual test plan
 **UI hint**: yes
 
 ### Phase 7: User Documentation and CLI Reference Sync
@@ -129,6 +135,6 @@ Phases execute in numeric order: 1, 2, 3, 4, 5, 6, 7
 | 2. SbxRuntime Skeleton and Pure Argv Builders | 2/2 | Complete   | 2026-05-15 |
 | 3. container_config Capability Gating and Workspace Path Conformance | 2/2 | Complete   | 2026-05-16 |
 | 4. Embedded sbx Kit and Materialization | 2/3 | Gap closure | 2026-05-16 |
-| 5. Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish) | 0/TBD | Not started | - |
+| 5. Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish) | 0/2 | Not started | - |
 | 6. Settings TUI, Cross-Machine Integration, and Sleep/Wake | 0/TBD | Not started | - |
 | 7. User Documentation and CLI Reference Sync | 0/TBD | Not started | - |
