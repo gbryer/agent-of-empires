@@ -7,7 +7,9 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use super::container_interface::{ContainerConfig, ContainerRuntimeInterface, RuntimeCapabilities};
+use super::container_interface::{
+    ContainerConfig, ContainerRuntimeInterface, EnvEntry, RuntimeCapabilities,
+};
 use super::error::{DockerError, Result};
 use super::runtime_base::RuntimeBase;
 use super::sbx;
@@ -243,8 +245,8 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 // from session layer), fall back to parsing the aoe container
                 // name convention (aoe_<agent>_<uuid>).
                 let agent_name = config.agent_name.as_deref().unwrap_or_else(|| {
-                    name.strip_prefix("aoe_")
-                        .and_then(|rest| rest.split('_').next())
+                    name.strip_prefix("aoe-sandbox-")
+                        .and_then(|rest| rest.split('-').next())
                         .unwrap_or("claude")
                 });
                 let sbx_rt = self.sbx.as_ref().expect(
@@ -347,18 +349,43 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 }
             }
             RuntimeKind::Sbx => {
-                // Phase 2 plan 02-01: route through sbx::argv::build_exec_args.
-                // Adapter at the dispatch site keeps the builder pure: the
-                // existing trait passes `options: Option<&str>` (e.g.
-                // "-w /workspace") which we parse into a workdir flag; env
-                // entries are not threaded through this entry point (they
-                // flow via the create-time config). Default to interactive
-                // + tty to match the existing Docker/Podman dispatch shape.
-                let workdir = options
-                    .and_then(|o| o.strip_prefix("-w "))
-                    .map(|w| w.trim());
+                let mut workdir: Option<&str> = None;
+                let mut env_entries: Vec<EnvEntry> = Vec::new();
+
+                if let Some(opts) = options {
+                    let tokens: Vec<&str> = opts.split_whitespace().collect();
+                    let mut i = 0;
+                    while i < tokens.len() {
+                        match tokens[i] {
+                            "-w" if i + 1 < tokens.len() => {
+                                workdir = Some(tokens[i + 1]);
+                                i += 2;
+                            }
+                            "-e" if i + 1 < tokens.len() => {
+                                let entry = tokens[i + 1];
+                                if let Some((k, v)) = entry.split_once('=') {
+                                    env_entries.push(EnvEntry::Literal {
+                                        key: k.to_string(),
+                                        value: v.to_string(),
+                                    });
+                                } else {
+                                    env_entries.push(EnvEntry::Inherit {
+                                        key: entry.to_string(),
+                                        value: String::new(),
+                                    });
+                                }
+                                i += 2;
+                            }
+                            _ => {
+                                i += 1;
+                            }
+                        }
+                    }
+                }
+
                 let cmd_parts = [cmd];
-                let args = sbx::argv::build_exec_args(name, workdir, &[], true, true, &cmd_parts);
+                let args =
+                    sbx::argv::build_exec_args(name, workdir, &env_entries, true, true, &cmd_parts);
                 std::iter::once("sbx".to_string())
                     .chain(args)
                     .collect::<Vec<_>>()
@@ -698,5 +725,39 @@ mod tests {
     fn test_sbx_capabilities_via_trait_method() {
         let rt = ContainerRuntime::sbx();
         assert_eq!(rt.capabilities(), RuntimeBase::SBX.capabilities);
+    }
+
+    #[test]
+    fn test_sbx_exec_command_parses_compound_options() {
+        let rt = ContainerRuntime::sbx();
+
+        // Both -w and -e flags
+        let cmd = rt.exec_command(
+            "sandbox1",
+            Some("-w /workspace/project -e KEY1 -e KEY2=val"),
+            "/bin/bash",
+        );
+        assert!(
+            cmd.contains("-w /workspace/project"),
+            "workdir missing: {cmd}"
+        );
+        assert!(cmd.contains("-e KEY1"), "inherit env missing: {cmd}");
+        assert!(cmd.contains("-e KEY2=val"), "literal env missing: {cmd}");
+        assert!(cmd.contains("/bin/bash"), "cmd missing: {cmd}");
+
+        // Only -e flags (no -w), as used by the tool-launch call site
+        let cmd = rt.exec_command("sandbox1", Some("-e AOE_INSTANCE_ID=abc -e KEY1"), "claude");
+        assert!(!cmd.contains("-w"), "should have no -w: {cmd}");
+        assert!(
+            cmd.contains("-e AOE_INSTANCE_ID=abc"),
+            "literal env missing: {cmd}"
+        );
+        assert!(cmd.contains("-e KEY1"), "inherit env missing: {cmd}");
+
+        // None options
+        let cmd = rt.exec_command("sandbox1", None, "bash");
+        assert!(!cmd.contains("-w"), "should have no -w: {cmd}");
+        assert!(!cmd.contains("-e"), "should have no -e: {cmd}");
+        assert!(cmd.contains("bash"));
     }
 }

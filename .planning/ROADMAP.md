@@ -98,7 +98,7 @@ Plans:
 - [ ] 05-02-PLAN.md — Dispatch arm replacement, session-layer publish_ports call, integration test, manual test plan
 
 ### Phase 6: Settings TUI, Cross-Machine Integration, and Sleep/Wake
-**Goal**: Users can pick `Sbx` from the runtime dropdown in global Settings, set it as a profile override, and override it per-session; every layer of the existing precedence chain works. Settings fields the resolved runtime cannot honor are visibly gated (greyed out with a footer note), never silently ignored. A cross-product unit test (every FieldKey × every ContainerRuntimeName) asserts editability matches capability declaration. End-to-end TUI / cockpit / web dashboard / cross-machine session creation against an sbx-backed runtime works transparently; no surface gets sbx-specific code paths beyond the runtime layer. Sleep/wake handler scaffolding lives in `src/process/macos.rs` / `src/process/linux.rs` (per AGENTS.md), wired to mark sbx sessions as "potentially clock-drifted" and to attempt a clock-resync via `sbx exec` on resume so HTTPS handshakes don't silently break after macOS sleep.
+**Goal**: Users can pick `Sbx` from the runtime dropdown in global Settings, set it as a profile override, and override it per-session; every layer of the existing precedence chain works. Settings fields the resolved runtime cannot honor are visibly gated (greyed out with a footer note), never silently ignored. A cross-product unit test (every FieldKey x every ContainerRuntimeName) asserts editability matches capability declaration. End-to-end TUI / cockpit / web dashboard / cross-machine session creation against an sbx-backed runtime works transparently; no surface gets sbx-specific code paths beyond the runtime layer. Sleep/wake handler scaffolding lives in `src/process/macos.rs` / `src/process/linux.rs` (per AGENTS.md), wired to mark sbx sessions as "potentially clock-drifted" and to attempt a clock-resync via `sbx exec` on resume so HTTPS handshakes don't silently break after macOS sleep.
 **Depends on**: Phase 5
 **Requirements**: RT-01, INT-01, INT-02, SET-01, SET-02, TEST-04
 **Success Criteria** (what must be TRUE):
@@ -110,8 +110,8 @@ Plans:
   6. `cargo test --test e2e sbx_runtime_selector -- --ignored` passes the new TUI / CLI surface coverage: the runtime dropdown shows `Sbx` and `aoe sandbox runtime sbx` (or whatever clap subcommand surfaces) succeeds
 **Plans**: 2 plans
 Plans:
-- [ ] 05-01-PLAN.md — Core SbxRuntime action verbs (parse module, ports module, create/exec/stop/rm/daemon health, unit tests)
-- [ ] 05-02-PLAN.md — Dispatch arm replacement, session-layer publish_ports call, integration test, manual test plan
+- [ ] 06-01-PLAN.md — Capability-driven field visibility filter in build_sandbox_fields + cross-product test + e2e sbx runtime selector + web session integration test
+- [ ] 06-02-PLAN.md — Sleep/wake handler (IOKit on macOS, D-Bus/busctl on Linux) with resync_sbx_clocks logic and unit tests
 **UI hint**: yes
 
 ### Phase 7: User Documentation and CLI Reference Sync
@@ -136,5 +136,5 @@ Phases execute in numeric order: 1, 2, 3, 4, 5, 6, 7
 | 3. container_config Capability Gating and Workspace Path Conformance | 2/2 | Complete   | 2026-05-16 |
 | 4. Embedded sbx Kit and Materialization | 2/3 | Gap closure | 2026-05-16 |
 | 5. Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish) | 0/2 | Not started | - |
-| 6. Settings TUI, Cross-Machine Integration, and Sleep/Wake | 0/TBD | Not started | - |
+| 6. Settings TUI, Cross-Machine Integration, and Sleep/Wake | 0/2 | Not started | - |
 | 7. User Documentation and CLI Reference Sync | 0/TBD | Not started | - |
