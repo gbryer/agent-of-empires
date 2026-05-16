@@ -63,6 +63,18 @@ fn guarded_install_verb_passes() {
 }
 
 #[test]
+fn install_command_array_format_fails() {
+    let out = run_check_kit("tests/fixtures/sbx_kits/install-array-command/spec.yaml");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("must be a string"),
+        "stderr did not mention 'must be a string': {}",
+        stderr
+    );
+}
+
+#[test]
 fn embedded_spec_passes() {
     // The project's own spec.yaml (authored in 04-01) must satisfy the lint.
     let out = std::process::Command::new("cargo")

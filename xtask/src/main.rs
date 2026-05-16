@@ -354,7 +354,29 @@ fn check_kit(spec_path: Option<&std::path::Path>) {
     require_str_field(&spec, "kind", &mut has_error, None);
     require_str_field(&spec, "name", &mut has_error, None);
 
+    if let Some(kind_str) = spec.get("kind").and_then(|v| v.as_str()) {
+        if kind_str != "agent" && kind_str != "mixin" {
+            eprintln!(
+                "check-kit: field `kind` must be \"agent\" or \"mixin\", got {:?}",
+                kind_str
+            );
+            has_error = true;
+        }
+    }
+
     if let Some(install) = require_sequence_field(&spec, "commands", "install", &mut has_error) {
+        for (i, entry) in install.iter().enumerate() {
+            if let Some(cmd_value) = entry.get("command") {
+                if cmd_value.as_sequence().is_some() {
+                    eprintln!(
+                        "check-kit: commands.install[{}].command must be a string, not an array; \
+                         sbx parses install commands as shell strings",
+                        i
+                    );
+                    has_error = true;
+                }
+            }
+        }
         lint_commands(&install, &mut has_error);
     }
     if let Some(startup) = require_sequence_field(&spec, "commands", "startup", &mut has_error) {
