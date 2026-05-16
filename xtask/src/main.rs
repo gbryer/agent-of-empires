@@ -250,15 +250,15 @@ fn extract_command_string(value: &serde_yaml::Value) -> Option<String> {
     }
 }
 
-fn lint_command_for_naked_install_verbs(command: &str, has_error: &mut bool) {
+fn lint_command_for_naked_install_verbs(command: &str, section: &str, has_error: &mut bool) {
     if is_idempotency_guarded(command) {
         return;
     }
     for verb in NAKED_INSTALL_VERBS {
         if command.contains(verb) {
             eprintln!(
-                "check-kit: naked install verb `{}` in commands.startup without idempotency guard:\n  {}",
-                verb, command
+                "check-kit: naked install verb `{}` in {} without idempotency guard:\n  {}",
+                verb, section, command
             );
             *has_error = true;
         }
@@ -316,11 +316,11 @@ fn require_sequence_field(
     seq
 }
 
-fn lint_commands(entries: &[serde_yaml::Value], has_error: &mut bool) {
+fn lint_commands(entries: &[serde_yaml::Value], section: &str, has_error: &mut bool) {
     for entry in entries {
         if let Some(cmd_value) = entry.get("command") {
             if let Some(cmd_str) = extract_command_string(cmd_value) {
-                lint_command_for_naked_install_verbs(&cmd_str, has_error);
+                lint_command_for_naked_install_verbs(&cmd_str, section, has_error);
             }
         }
     }
@@ -377,10 +377,10 @@ fn check_kit(spec_path: Option<&std::path::Path>) {
                 }
             }
         }
-        lint_commands(&install, &mut has_error);
+        lint_commands(&install, "commands.install", &mut has_error);
     }
     if let Some(startup) = require_sequence_field(&spec, "commands", "startup", &mut has_error) {
-        lint_commands(&startup, &mut has_error);
+        lint_commands(&startup, "commands.startup", &mut has_error);
     }
 
     if has_error {
