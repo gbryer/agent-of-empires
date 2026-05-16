@@ -1,0 +1,55 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s idle > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s waiting > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"
+          }
+        ]
+      }
+    ]
+  }
+}
