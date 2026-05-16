@@ -38,7 +38,7 @@ impl SbxRuntime {
 
     pub fn is_available(&self) -> bool {
         Command::new(&self.binary)
-            .arg("--version")
+            .arg("help")
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
@@ -123,7 +123,30 @@ impl SbxRuntime {
 
         let args = argv::build_create_args(name, image, Some(&kit_path), config);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        self.run(&arg_refs)?;
+
+        let mut cmd = Command::new(&self.binary);
+        cmd.args(&arg_refs);
+        for entry in &config.environment {
+            if let crate::containers::container_interface::EnvEntry::Inherit { key, value } = entry
+            {
+                cmd.env(key, value);
+            }
+        }
+        let output = cmd.output().map_err(|e| {
+            DockerError::CommandFailed(format!(
+                "sbx {} spawn failed: {}",
+                arg_refs.first().unwrap_or(&""),
+                e
+            ))
+        })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(DockerError::CommandFailed(format!(
+                "sbx {} failed: {}",
+                arg_refs.first().unwrap_or(&""),
+                stderr.trim()
+            )));
+        }
 
         self.wait_for_ready(name)?;
         Ok(name.to_string())

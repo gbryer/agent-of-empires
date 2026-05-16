@@ -979,6 +979,24 @@ fn build_sandbox_fields(
 
     let mut fields = vec![
         SettingField {
+            key: FieldKey::ContainerRuntime,
+            label: "Container Runtime",
+            description: "Container runtime for sandboxing",
+            value: FieldValue::Select {
+                selected: container_runtime_selected,
+                options: container_runtime_options.clone(),
+            },
+            category: SettingsCategory::Sandbox,
+            has_override: o_cr,
+            inherited_display: inherited_if(
+                o_cr,
+                FieldValue::Select {
+                    selected: global_container_runtime_selected,
+                    options: container_runtime_options,
+                },
+            ),
+        },
+        SettingField {
             key: FieldKey::SandboxEnabledByDefault,
             label: "Enabled by Default",
             description: "Enable sandbox mode by default for new sessions",
@@ -1120,24 +1138,6 @@ fn build_sandbox_fields(
             inherited_display: inherited_if(
                 o_ci,
                 FieldValue::OptionalText(global.sandbox.custom_instruction.clone()),
-            ),
-        },
-        SettingField {
-            key: FieldKey::ContainerRuntime,
-            label: "Container Runtime",
-            description: "Container runtime for sandboxing",
-            value: FieldValue::Select {
-                selected: container_runtime_selected,
-                options: container_runtime_options.clone(),
-            },
-            category: SettingsCategory::Sandbox,
-            has_override: o_cr,
-            inherited_display: inherited_if(
-                o_cr,
-                FieldValue::Select {
-                    selected: global_container_runtime_selected,
-                    options: container_runtime_options,
-                },
             ),
         },
     ];

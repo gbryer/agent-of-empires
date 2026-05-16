@@ -145,6 +145,7 @@ pub async fn run(profile: &str, startup_warning: Option<String>) -> Result<()> {
     if let Some(warning) = combined_warning {
         app.show_startup_warning(&warning);
     }
+    crate::process::register_wake_handler();
     let result = app.run(&mut terminal).await;
 
     crate::session::clear_tui_heartbeat();
