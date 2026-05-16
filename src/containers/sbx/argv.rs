@@ -129,6 +129,7 @@ mod tests {
             cpu_limit: None,
             memory_limit: None,
             port_mappings: vec![],
+            agent_name: None,
         }
     }
 

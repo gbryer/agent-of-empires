@@ -1262,6 +1262,7 @@ pub(crate) fn build_container_config(
         cpu_limit: sandbox_config.cpu_limit,
         memory_limit: sandbox_config.memory_limit,
         port_mappings: sandbox_config.port_mappings.clone(),
+        agent_name: Some(tool.to_string()),
     };
 
     conform_for_capabilities(

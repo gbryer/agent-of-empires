@@ -239,13 +239,14 @@ impl ContainerRuntimeInterface for ContainerRuntime {
         }
         match self.kind {
             RuntimeKind::Sbx => {
-                // Extract agent name from the aoe container name convention
-                // (aoe_<agent>_<uuid>). Falls back to "claude" if the name
-                // doesn't match the expected pattern.
-                let agent_name = name
-                    .strip_prefix("aoe_")
-                    .and_then(|rest| rest.split('_').next())
-                    .unwrap_or("claude");
+                // Prefer explicit agent_name from ContainerConfig (threaded
+                // from session layer), fall back to parsing the aoe container
+                // name convention (aoe_<agent>_<uuid>).
+                let agent_name = config.agent_name.as_deref().unwrap_or_else(|| {
+                    name.strip_prefix("aoe_")
+                        .and_then(|rest| rest.split('_').next())
+                        .unwrap_or("claude")
+                });
                 let sbx_rt = self.sbx.as_ref().expect(
                     "ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx",
                 );
@@ -686,6 +687,7 @@ mod tests {
             cpu_limit: None,
             memory_limit: None,
             port_mappings: Vec::new(),
+            agent_name: None,
         };
         let args = rt.build_create_args("aoe-sandbox-test", "alpine:latest", &cfg);
 
