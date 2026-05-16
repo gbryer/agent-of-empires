@@ -47,6 +47,9 @@ pub struct ContainerConfig {
     pub cpu_limit: Option<String>,
     pub memory_limit: Option<String>,
     pub port_mappings: Vec<String>,
+    /// Agent name for sbx kit materialization. Populated by the session layer
+    /// from `Instance::tool`; consumed only by the sbx create path.
+    pub agent_name: Option<String>,
 }
 
 /// Declarative capability matrix for a container runtime.

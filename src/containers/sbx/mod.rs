@@ -9,8 +9,8 @@ use crate::containers::runtime_base::RuntimeBase;
 
 pub mod argv;
 pub mod kit;
-pub(crate) mod parse;
-pub(crate) mod ports;
+pub mod parse;
+pub mod ports;
 
 /// Peer struct for the Docker Sandboxes (`sbx`) backend. Phase 2 plan 02-01
 /// owns the skeleton: an injectable binary path, an availability probe, and a
@@ -19,8 +19,14 @@ pub(crate) mod ports;
 /// `binary` is a `PathBuf` instead of the `&'static str` used by `RuntimeBase`
 /// so unit tests can inject a tempfile path to exercise methods without
 /// a host `sbx` install (CONTEXT.md D-10).
-pub(crate) struct SbxRuntime {
+pub struct SbxRuntime {
     pub(crate) binary: PathBuf,
+}
+
+impl Default for SbxRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SbxRuntime {

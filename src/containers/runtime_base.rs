@@ -442,6 +442,7 @@ mod tests {
             cpu_limit: None,
             memory_limit: None,
             port_mappings: vec![],
+            agent_name: None,
         };
 
         let args = base.build_create_args("test-container", "alpine:latest", &config);
@@ -465,6 +466,7 @@ mod tests {
             cpu_limit: None,
             memory_limit: None,
             port_mappings: vec![],
+            agent_name: None,
         };
 
         let args = base.build_create_args("test-container", "alpine:latest", &config);
@@ -513,6 +515,7 @@ mod tests {
             cpu_limit: Some("2".to_string()),
             memory_limit: Some("4g".to_string()),
             port_mappings: vec!["3000:3000".to_string()],
+            agent_name: None,
         };
 
         let args = base.build_create_args("test", "ubuntu:latest", &config);
@@ -551,6 +554,7 @@ mod tests {
             cpu_limit: None,
             memory_limit: None,
             port_mappings: vec![],
+            agent_name: None,
         };
 
         let args = base.build_create_args("test", "alpine:latest", &config);
@@ -580,6 +584,7 @@ mod tests {
             cpu_limit: None,
             memory_limit: None,
             port_mappings: vec![],
+            agent_name: None,
         };
 
         let args = base.build_create_args("test", "alpine:latest", &config);
@@ -619,6 +624,7 @@ mod tests {
             cpu_limit: None,
             memory_limit: None,
             port_mappings: vec!["3000:3000".to_string(), "5432:5432".to_string()],
+            agent_name: None,
         };
 
         let args = base.build_create_args("test", "alpine:latest", &config);
