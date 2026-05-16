@@ -7,14 +7,14 @@ use serde::Deserialize;
 
 /// Top-level wrapper around `sbx ls --json` output.
 #[derive(Debug, Deserialize)]
-pub(crate) struct SbxListOutput {
+pub struct SbxListOutput {
     #[serde(default)]
     pub sandboxes: Vec<SbxSandboxInfo>,
 }
 
 /// A single sandbox entry from `sbx ls --json`.
 #[derive(Debug, Deserialize)]
-pub(crate) struct SbxSandboxInfo {
+pub struct SbxSandboxInfo {
     #[serde(default)]
     pub id: String,
     #[serde(default)]
@@ -32,7 +32,7 @@ pub(crate) struct SbxSandboxInfo {
 /// Typed daemon health for richer diagnostics (D-05). Not on the trait;
 /// sbx-specific callers use this for `aoe doctor` or settings hints.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SbxDaemonHealth {
+pub enum SbxDaemonHealth {
     Running,
     NotLoggedIn,
     PolicyNotConfigured,
@@ -41,10 +41,7 @@ pub(crate) enum SbxDaemonHealth {
 }
 
 /// Find a sandbox by exact name in a parsed listing.
-pub(crate) fn find_by_name<'a>(
-    sandboxes: &'a [SbxSandboxInfo],
-    name: &str,
-) -> Option<&'a SbxSandboxInfo> {
+pub fn find_by_name<'a>(sandboxes: &'a [SbxSandboxInfo], name: &str) -> Option<&'a SbxSandboxInfo> {
     sandboxes.iter().find(|s| s.name == name)
 }
 

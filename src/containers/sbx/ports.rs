@@ -10,7 +10,7 @@ use super::SbxRuntime;
 /// Per-port result from `publish_ports`. The session layer logs failures via
 /// `tracing::warn!` and stores them for TUI/web to surface (Phase 6).
 #[derive(Debug, Clone)]
-pub(crate) enum PortPublishResult {
+pub enum PortPublishResult {
     Ok(String),
     Failed { port: String, stderr: String },
 }
