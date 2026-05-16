@@ -358,7 +358,7 @@ fn run_on_destroy_hooks(instance: &Instance) {
     // would otherwise corrupt the rendered UI (see issue #901).
     let errors = if is_sandboxed {
         if let Some(ref sandbox) = instance.sandbox_info {
-            let workdir = instance.container_workdir();
+            let workdir = instance.container_workdir_now();
             repo_config::execute_hooks_in_container_best_effort(
                 &resolved_on_destroy,
                 &sandbox.container_name,

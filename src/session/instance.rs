@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::containers::{self, ContainerRuntimeInterface, DockerContainer};
+use crate::containers::{self, ContainerRuntimeInterface, DockerContainer, RuntimeCapabilities};
 use crate::tmux;
 
 use super::container_config;
@@ -605,7 +605,7 @@ impl Instance {
                     let container_name = self.sandbox_info.as_ref()?.container_name.clone();
                     try_capture_opencode_session_id_in_container(
                         &container_name,
-                        &self.container_workdir(),
+                        &self.container_workdir_now(),
                         &exclusion,
                         None,
                     )
@@ -619,7 +619,7 @@ impl Instance {
                     let container_name = self.sandbox_info.as_ref()?.container_name.clone();
                     try_capture_vibe_session_id_in_container(
                         &container_name,
-                        &self.container_workdir(),
+                        &self.container_workdir_now(),
                         &exclusion,
                     )
                     .ok()
@@ -632,7 +632,7 @@ impl Instance {
                     let container_name = self.sandbox_info.as_ref()?.container_name.clone();
                     try_capture_pi_session_id_in_container(
                         &container_name,
-                        &self.container_workdir(),
+                        &self.container_workdir_now(),
                         &exclusion,
                     )
                     .ok()
@@ -645,7 +645,7 @@ impl Instance {
                     let container_name = self.sandbox_info.as_ref()?.container_name.clone();
                     try_capture_codex_session_id_in_container(
                         &container_name,
-                        &self.container_workdir(),
+                        &self.container_workdir_now(),
                         &exclusion,
                     )
                     .ok()
@@ -658,7 +658,7 @@ impl Instance {
                     let container_name = self.sandbox_info.as_ref()?.container_name.clone();
                     try_capture_gemini_session_id_in_container(
                         &container_name,
-                        &self.container_workdir(),
+                        &self.container_workdir_now(),
                         &exclusion,
                     )
                     .ok()
@@ -671,7 +671,7 @@ impl Instance {
                     let container_name = self.sandbox_info.as_ref()?.container_name.clone();
                     try_capture_hermes_session_id_in_container(
                         &container_name,
-                        &self.container_workdir(),
+                        &self.container_workdir_now(),
                         &exclusion,
                     )
                     .ok()
@@ -813,7 +813,7 @@ impl Instance {
         };
 
         // Get workspace path inside container (handles bare repo worktrees correctly)
-        let container_workdir = self.container_workdir();
+        let container_workdir = self.container_workdir_now();
 
         let cmd = container.exec_command(
             Some(&format!("-w {} {}", container_workdir, env_part)),
@@ -932,7 +932,7 @@ impl Instance {
             let container = self.get_container_for_instance()?;
             if let Some(ref hook_cmds) = on_launch_hooks {
                 if let Some(ref sandbox) = self.sandbox_info {
-                    let workdir = self.container_workdir();
+                    let workdir = self.container_workdir_now();
                     if let Err(e) = super::repo_config::execute_hooks_in_container(
                         hook_cmds,
                         &sandbox.container_name,
@@ -1245,9 +1245,14 @@ impl Instance {
             return Ok(container);
         }
 
-        // Ensure image is available (always pulls to get latest)
+        // Ensure image is available (always pulls to get latest, when supported).
+        // Phase 3 RT-06 (D-12): gate on the runtime's capability matrix; sbx has
+        // no `pull` verb and silently skips. RuntimeBase::ensure_image keeps its
+        // defensive Err(NotSupported) as a safety net for any forgotten gates (D-13).
         let runtime = containers::get_container_runtime();
-        runtime.ensure_image(image)?;
+        if runtime.capabilities().supports_image_pull {
+            runtime.ensure_image(image)?;
+        }
 
         let config = self.build_container_config()?;
         let container_id = container.create(&config)?;
@@ -1259,11 +1264,29 @@ impl Instance {
         Ok(container)
     }
 
-    /// Get the container working directory for this instance.
-    pub fn container_workdir(&self) -> String {
-        container_config::compute_volume_paths(Path::new(&self.project_path), &self.project_path)
-            .map(|(_, wd)| wd)
-            .unwrap_or_else(|_| "/workspace".to_string())
+    /// Get the container working directory for this instance, conformed for
+    /// the supplied capability matrix. Phase 3 RT-04 (D-10): exec-time consumers
+    /// (sbx exec -w, status pollers) must see the same conformed workdir that
+    /// build_container_config's post-pass produced, otherwise the path inside
+    /// the sandbox is wrong. Pure function (caps in, String out), mockable.
+    pub fn container_workdir(&self, caps: RuntimeCapabilities) -> String {
+        let (volumes, working_dir) = container_config::compute_volume_paths(
+            Path::new(&self.project_path),
+            &self.project_path,
+        )
+        .unwrap_or_else(|_| (vec![], "/workspace".to_string()));
+        let (_, conformed_wd) =
+            container_config::conform_workspace_paths(volumes, working_dir, caps);
+        conformed_wd
+    }
+
+    /// Convenience shim that fetches the live runtime's capabilities once and
+    /// delegates to container_workdir(caps). Keeps the 19 exec-time call sites
+    /// at a single uniform `_now` append rather than each fetching caps locally.
+    /// The pure container_workdir(caps) form stays mockable for unit tests.
+    pub fn container_workdir_now(&self) -> String {
+        let caps = containers::get_container_runtime().capabilities();
+        self.container_workdir(caps)
     }
 
     fn build_container_config(&self) -> Result<crate::containers::ContainerConfig> {
@@ -1272,17 +1295,10 @@ impl Instance {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("sandbox_info missing for sandboxed session"))?;
         // Capabilities and runtime_name drive the end-of-function conformance
-        // post-pass inside container_config::build_container_config. The
-        // resolved runtime is the one returned by containers::get_container_runtime;
-        // its capability matrix lives on the same struct. Plan 03-02 refines the
-        // accessor pattern (replaces the Config::load + match below with a direct
-        // runtime.name() method) and threads capabilities through container_workdir
-        // for the exec-time consumers; this passthrough is the minimum delta that
-        // keeps the build green at Plan 03-01's wave boundary.
-        let runtime = crate::containers::get_container_runtime();
-        let runtime_name = crate::session::Config::load()
-            .map(|c| c.sandbox.container_runtime)
-            .unwrap_or_default();
+        // post-pass inside container_config::build_container_config. Both come
+        // from the resolved runtime; no Config::load round-trip needed now that
+        // ContainerRuntime exposes name() (Phase 3 RT-04).
+        let runtime = containers::get_container_runtime();
         container_config::build_container_config(
             &self.project_path,
             sandbox,
@@ -1292,7 +1308,7 @@ impl Instance {
             self.workspace_info.as_ref(),
             &self.source_profile,
             runtime.capabilities(),
-            runtime_name,
+            runtime.name(),
         )
     }
 
@@ -1319,7 +1335,7 @@ impl Instance {
                     };
                     Box::new(claude_poll_fn_sandboxed(
                         container_name,
-                        self.container_workdir(),
+                        self.container_workdir_now(),
                     ))
                 } else {
                     Box::new(claude_poll_fn(self.project_path.clone()))
@@ -1337,7 +1353,7 @@ impl Instance {
                     };
                     Box::new(opencode_poll_fn_sandboxed(
                         container_name,
-                        self.container_workdir(),
+                        self.container_workdir_now(),
                         self.id.clone(),
                         launch_time_ms,
                     ))
@@ -1357,7 +1373,7 @@ impl Instance {
                     };
                     Box::new(vibe_poll_fn_sandboxed(
                         container_name,
-                        self.container_workdir(),
+                        self.container_workdir_now(),
                         self.id.clone(),
                     ))
                 } else {
@@ -1372,7 +1388,7 @@ impl Instance {
                     };
                     Box::new(pi_poll_fn_sandboxed(
                         container_name,
-                        self.container_workdir(),
+                        self.container_workdir_now(),
                         self.id.clone(),
                     ))
                 } else {
@@ -1387,7 +1403,7 @@ impl Instance {
                     };
                     Box::new(codex_poll_fn_sandboxed(
                         container_name,
-                        self.container_workdir(),
+                        self.container_workdir_now(),
                         self.id.clone(),
                     ))
                 } else {
@@ -1402,7 +1418,7 @@ impl Instance {
                     };
                     Box::new(gemini_poll_fn_sandboxed(
                         container_name,
-                        self.container_workdir(),
+                        self.container_workdir_now(),
                         self.id.clone(),
                     ))
                 } else {
@@ -1417,7 +1433,7 @@ impl Instance {
                     };
                     Box::new(hermes_poll_fn_sandboxed(
                         container_name,
-                        self.container_workdir(),
+                        self.container_workdir_now(),
                         self.id.clone(),
                     ))
                 } else {

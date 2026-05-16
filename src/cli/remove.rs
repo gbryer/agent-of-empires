@@ -89,7 +89,7 @@ pub async fn run(profile: &str, args: RemoveArgs) -> Result<()> {
                     // legitimately needs user input can still be answered.
                     let errors = if is_sandboxed {
                         if let Some(ref sandbox) = inst.sandbox_info {
-                            let workdir = inst.container_workdir();
+                            let workdir = inst.container_workdir_now();
                             crate::session::repo_config::execute_hooks_in_container_best_effort(
                                 &on_destroy,
                                 &sandbox.container_name,

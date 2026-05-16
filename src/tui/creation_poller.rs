@@ -164,7 +164,7 @@ impl CreationPoller {
                 }
                 container_started = true;
                 if let Some(ref sandbox) = instance.sandbox_info {
-                    let workdir = instance.container_workdir();
+                    let workdir = instance.container_workdir_now();
                     if let Err(e) = repo_config::execute_hooks_in_container_streamed(
                         &hooks.on_create,
                         &sandbox.container_name,
@@ -205,7 +205,7 @@ impl CreationPoller {
                 }
                 if container_started {
                     if let Some(ref sandbox) = instance.sandbox_info {
-                        let workdir = instance.container_workdir();
+                        let workdir = instance.container_workdir_now();
                         if let Err(e) = repo_config::execute_hooks_in_container_streamed(
                             &hooks.on_launch,
                             &sandbox.container_name,

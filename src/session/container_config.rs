@@ -3785,4 +3785,99 @@ volume_ignores = [".venv", "node_modules"]
             config.anonymous_volumes
         );
     }
+
+    // --- Phase 3 RT-06 SC-4 tests: ensure_image capability gating ---
+    //
+    // Source-substring + matrix-assertion pair is proportional to the two-line
+    // guard in instance.rs. Building a mock runtime to test absence-of-call is
+    // non-trivial (no precedent in the codebase) and isn't justified.
+
+    #[test]
+    fn test_ensure_image_call_site_is_capability_gated() {
+        let src = include_str!("instance.rs");
+        let idx = src
+            .find("runtime.ensure_image(image)")
+            .expect("ensure_image call site must exist in instance.rs");
+        let prefix = &src[idx.saturating_sub(200)..idx];
+        assert!(
+            prefix.contains("supports_image_pull"),
+            "ensure_image call must be gated on supports_image_pull; got prefix: {}",
+            prefix
+        );
+    }
+
+    #[test]
+    fn test_capability_matrices_drive_ensure_image_branch() {
+        use crate::containers::runtime_base::RuntimeBase;
+        assert!(
+            RuntimeBase::DOCKER.capabilities.supports_image_pull,
+            "Docker must report supports_image_pull = true"
+        );
+        assert!(
+            RuntimeBase::PODMAN.capabilities.supports_image_pull,
+            "Podman must report supports_image_pull = true"
+        );
+        assert!(
+            RuntimeBase::APPLE_CONTAINER
+                .capabilities
+                .supports_image_pull,
+            "Apple Container must report supports_image_pull = true"
+        );
+        assert!(
+            !RuntimeBase::SBX.capabilities.supports_image_pull,
+            "sbx must report supports_image_pull = false"
+        );
+    }
+
+    // --- Phase 3 RT-04 exec-time threading test ---
+    //
+    // SC-4-companion: verifies Instance::container_workdir(caps) returns the
+    // conformed host_path under sbx capabilities and the pre-conformance
+    // /workspace/... container path under Docker capabilities. The same
+    // conformance applied at mount-time must show up at exec-time.
+
+    #[test]
+    #[serial_test::serial]
+    fn test_instance_container_workdir_threads_capabilities() {
+        use crate::containers::runtime_base::RuntimeBase;
+        use crate::session::instance::Instance;
+
+        // Isolate HOME so Config::load() (invoked indirectly via Instance
+        // construction in some envs) doesn't read real user state.
+        let temp_home = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp_home.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp_home.path().join(".config"));
+
+        let project_dir = TempDir::new().unwrap();
+        git2::Repository::init(project_dir.path()).unwrap();
+        let canonical_project = project_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        // Instance::new takes the non-canonical path; container_workdir reads
+        // self.project_path which is what we pass in.
+        let instance = Instance::new("threading-test", project_dir.path().to_str().unwrap());
+
+        // Under sbx caps (!supports_arbitrary_volume_paths), workdir is conformed
+        // to the canonicalized host_path so `sbx exec -w` resolves inside the sandbox.
+        let sbx_workdir = instance.container_workdir(RuntimeBase::SBX.capabilities);
+        assert_eq!(
+            sbx_workdir, canonical_project,
+            "sbx caps must conform workdir to host_path; got {}",
+            sbx_workdir
+        );
+
+        // Under Docker caps (supports_arbitrary_volume_paths), workdir is the
+        // pre-conformance /workspace/<dir_name> container path.
+        let docker_workdir = instance.container_workdir(RuntimeBase::DOCKER.capabilities);
+        assert!(
+            docker_workdir.starts_with("/workspace/"),
+            "Docker caps must keep the /workspace/... container path; got {}",
+            docker_workdir
+        );
+    }
 }
