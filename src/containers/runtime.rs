@@ -104,7 +104,14 @@ impl ContainerRuntimeInterface for ContainerRuntime {
     }
 
     fn is_daemon_running(&self) -> bool {
-        self.base.is_daemon_running()
+        match self.kind {
+            RuntimeKind::Sbx => self
+                .sbx
+                .as_ref()
+                .expect("ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx")
+                .is_daemon_running(),
+            _ => self.base.is_daemon_running(),
+        }
     }
 
     fn capabilities(&self) -> RuntimeCapabilities {
@@ -159,15 +166,11 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 let output = self.base.command().args(["logs", name]).output()?;
                 Ok(output.status.success())
             }
-            RuntimeKind::Sbx => {
-                // Safe Phase 1 stub per CONTEXT.md D-05/D-06; the action
-                // verbs are deferred to Phase 5 which wires them via real
-                // `sbx ls` / `sbx inspect` subprocess calls. is_available
-                // now does a real PATH probe (02-01), so callers that
-                // bypass the availability gate still get a sane answer.
-                let _ = name;
-                Ok(false)
-            }
+            RuntimeKind::Sbx => self
+                .sbx
+                .as_ref()
+                .expect("ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx")
+                .does_container_exist(name),
         }
     }
 
@@ -203,14 +206,11 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                     Ok(false)
                 }
             }
-            RuntimeKind::Sbx => {
-                // Safe Phase 1 stub per CONTEXT.md D-05/D-06; Phase 5
-                // replaces with sbx's running-state probe. is_available
-                // does a real probe now (02-01), so this arm is reachable
-                // and must return a defined answer rather than panic.
-                let _ = name;
-                Ok(false)
-            }
+            RuntimeKind::Sbx => self
+                .sbx
+                .as_ref()
+                .expect("ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx")
+                .is_container_running(name),
         }
     }
 
@@ -237,19 +237,81 @@ impl ContainerRuntimeInterface for ContainerRuntime {
         if self.does_container_exist(name)? {
             return Err(DockerError::ContainerAlreadyExists(name.to_string()));
         }
-        self.base.run_create(name, image, config)
+        match self.kind {
+            RuntimeKind::Sbx => {
+                // Extract agent name from the aoe container name convention
+                // (aoe_<agent>_<uuid>). Falls back to "claude" if the name
+                // doesn't match the expected pattern.
+                let agent_name = name
+                    .strip_prefix("aoe_")
+                    .and_then(|rest| rest.split('_').next())
+                    .unwrap_or("claude");
+                let sbx_rt = self.sbx.as_ref().expect(
+                    "ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx",
+                );
+                let result = sbx_rt.create_container(name, image, config, agent_name)?;
+
+                // Post-create port publishing (D-01): sbx cannot publish
+                // ports at create time; iterate port_mappings individually.
+                if !config.port_mappings.is_empty() {
+                    let results = sbx_rt.publish_ports(name, &config.port_mappings);
+                    for r in &results {
+                        match r {
+                            sbx::ports::PortPublishResult::Ok(spec) => {
+                                tracing::info!(
+                                    target: "containers.sbx",
+                                    %name, %spec,
+                                    "port published"
+                                );
+                            }
+                            sbx::ports::PortPublishResult::Failed { port, stderr } => {
+                                tracing::warn!(
+                                    target: "containers.sbx",
+                                    %name, %port, %stderr,
+                                    "port publish failed (non-fatal)"
+                                );
+                            }
+                        }
+                    }
+                }
+
+                Ok(result)
+            }
+            _ => self.base.run_create(name, image, config),
+        }
     }
 
     fn start_container(&self, name: &str) -> Result<()> {
-        self.base.start_container(name)
+        match self.kind {
+            RuntimeKind::Sbx => self
+                .sbx
+                .as_ref()
+                .expect("ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx")
+                .start_container(name),
+            _ => self.base.start_container(name),
+        }
     }
 
     fn stop_container(&self, name: &str) -> Result<()> {
-        self.base.stop_container(name)
+        match self.kind {
+            RuntimeKind::Sbx => self
+                .sbx
+                .as_ref()
+                .expect("ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx")
+                .stop_container(name),
+            _ => self.base.stop_container(name),
+        }
     }
 
     fn remove(&self, name: &str, force: bool) -> Result<()> {
-        self.base.remove(name, force)
+        match self.kind {
+            RuntimeKind::Sbx => self
+                .sbx
+                .as_ref()
+                .expect("ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx")
+                .remove(name, force),
+            _ => self.base.remove(name, force),
+        }
     }
 
     fn exec_command(&self, name: &str, options: Option<&str>, cmd: &str) -> String {
@@ -305,7 +367,14 @@ impl ContainerRuntimeInterface for ContainerRuntime {
     }
 
     fn exec(&self, name: &str, cmd: &[&str]) -> Result<std::process::Output> {
-        self.base.exec(name, cmd)
+        match self.kind {
+            RuntimeKind::Sbx => self
+                .sbx
+                .as_ref()
+                .expect("ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx")
+                .exec(name, cmd, None, &[], false, false),
+            _ => self.base.exec(name, cmd),
+        }
     }
 
     fn batch_running_states(&self, prefix: &str) -> HashMap<String, bool> {
@@ -349,14 +418,11 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 let _ = prefix;
                 HashMap::new()
             }
-            RuntimeKind::Sbx => {
-                // Safe Phase 1 stub per CONTEXT.md D-05/D-06; Phase 5
-                // replaces with the real `sbx ls` parse. The empty map
-                // is the right answer for callers that reach here before
-                // the action verbs are wired.
-                let _ = prefix;
-                HashMap::new()
-            }
+            RuntimeKind::Sbx => self
+                .sbx
+                .as_ref()
+                .expect("ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx")
+                .batch_running_states(prefix),
         }
     }
 }
