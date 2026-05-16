@@ -1,0 +1,8 @@
+schemaVersion: "1"
+kind: agent
+name: guarded-verb
+commands:
+  install:
+    - command: ["sh", "-c", "true"]
+  startup:
+    - command: ["sh", "-c", "command -v curl >/dev/null || apt-get install -y curl"]

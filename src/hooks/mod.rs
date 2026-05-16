@@ -13,7 +13,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-pub use status_file::{cleanup_hook_status_dir, hook_status_dir, read_hook_status};
+pub use status_file::{
+    cleanup_hook_status_dir, cleanup_hook_status_dir_for_instance, hook_status_dir,
+    read_hook_status, read_hook_status_for_instance, resolve_status_dir, sbx_hook_status_dir,
+};
 
 /// Base directory for all AoE hook status files.
 pub(crate) const HOOK_STATUS_BASE: &str = "/tmp/aoe-hooks";

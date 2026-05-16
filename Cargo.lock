@@ -5297,6 +5297,7 @@ dependencies = [
  "clap",
  "clap-markdown",
  "regex",
+ "serde_yaml",
 ]
 
 [[package]]

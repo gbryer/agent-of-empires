@@ -532,7 +532,7 @@ async fn capture_session(profile: &str, args: CaptureArgs) -> Result<()> {
         } else {
             raw
         };
-        let status = crate::hooks::read_hook_status(&inst.id)
+        let status = crate::hooks::read_hook_status_for_instance(inst)
             .unwrap_or_else(|| tmux_session.detect_status(&inst.tool).unwrap_or_default());
         (content, format!("{:?}", status).to_lowercase())
     };

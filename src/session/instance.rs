@@ -1600,7 +1600,7 @@ impl Instance {
     fn wait_for_pane_ready(&self, session: &tmux::Session) {
         let shell_check_unreliable = self.expects_shell()
             || self.has_command_override()
-            || crate::hooks::read_hook_status(&self.id).is_some();
+            || crate::hooks::read_hook_status_for_instance(self).is_some();
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(3000);
         loop {
             if !session.exists() {
@@ -1639,7 +1639,7 @@ impl Instance {
             }
         }
 
-        crate::hooks::cleanup_hook_status_dir(&self.id);
+        crate::hooks::cleanup_hook_status_dir_for_instance(self);
 
         Ok(())
     }
@@ -1758,7 +1758,7 @@ impl Instance {
             self.has_command_override()
         );
 
-        if let Some(hook_status) = crate::hooks::read_hook_status(&self.id) {
+        if let Some(hook_status) = crate::hooks::read_hook_status_for_instance(self) {
             tracing::trace!(
                 "status '{}': hook detected {:?}, is_dead={}",
                 self.title,
