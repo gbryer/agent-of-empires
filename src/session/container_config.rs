@@ -1324,8 +1324,8 @@ fn conform_for_capabilities(
 
     let mut dropped: Vec<String> = Vec::new();
     config.volumes.retain(|v| {
-        let keep = v.container_path == v.host_path;
-        if !keep {
+        let paths_match = v.container_path == v.host_path;
+        if !paths_match {
             tracing::debug!(
                 target: "containers.config",
                 runtime = ?runtime_name,
@@ -1333,11 +1333,24 @@ fn conform_for_capabilities(
                 container = %v.container_path,
                 "dropping mount (!supports_arbitrary_volume_paths)"
             );
-            // Track the container path so the summary warn! enumerates what
-            // the user lost (gitconfig, SSH, GCP creds, agent config, etc.).
             dropped.push(v.container_path.clone());
+            return false;
         }
-        keep
+        // sbx only accepts directories as workspace paths; drop file mounts
+        // (e.g. .gitconfig) that survived conformance because host==container
+        // after rewrite but are not directories.
+        let host = Path::new(&v.host_path);
+        if host.exists() && !host.is_dir() {
+            tracing::debug!(
+                target: "containers.config",
+                runtime = ?runtime_name,
+                path = %v.host_path,
+                "dropping file mount (sbx requires directories)"
+            );
+            dropped.push(v.container_path.clone());
+            return false;
+        }
+        true
     });
 
     // WR-07: convenience mounts that can't conform are silently lost under
