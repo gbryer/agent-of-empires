@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Capability Surface and Trait Foundation** - Extend `ContainerRuntimeInterface` with `RuntimeCapabilities`, migrate the existing two flags, add five new flags, register `Sbx` in `ContainerRuntimeName`, and lock platform support (completed 2026-05-15)
 - [x] **Phase 2: SbxRuntime Skeleton and Pure Argv Builders** - Stand up `src/containers/sbx/` with capability constants, pure argv builders for `sbx create` / `exec` / `ports --publish`, and `is_available()`; fully unit-testable without sbx installed (completed 2026-05-15)
 - [x] **Phase 3: container_config Capability Gating and Workspace Path Conformance** - Rewrite `compute_volume_paths` and `build_container_config` to honor `!supports_arbitrary_volume_paths` (host_path == container_path) and `!supports_image_pull` (skip ensure_image), with a clear validation error for inconformable configs (completed 2026-05-16)
-- [ ] **Phase 4: Embedded sbx Kit and Materialization** - Author `src/containers/sbx_kit/` (`spec.yaml`, `install.sh`, status-hook shims), embed via stdlib `include_str!`/`include_bytes!`, materialize to a content-hashed cache dir on first use, and CI-validate the spec
+- [ ] **Phase 4: Embedded sbx Kit and Materialization** - Author `src/containers/sbx_kit/` (`spec.yaml`, `install.sh`, status-hook shims), embed via stdlib `include_str!`/`include_bytes!`, materialize to a content-hashed cache dir on first use, and CI-validate the spec (completed 2026-05-16; gap closure in progress)
 - [ ] **Phase 5: Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish)** - Wire real `sbx` subprocess calls into `create_container` (with readiness probe + first-exec retry), `exec_command`, `stop_container`, `remove`, batch state via `sbx ls --json`, and the post-create `sbx ports --publish` per-port loop
 - [ ] **Phase 6: Settings TUI, Cross-Machine Integration, and Sleep/Wake** - Wire `Sbx` through the settings TUI per AGENTS.md (FieldKey + apply/clear + override merge), gate field visibility on capabilities, verify cockpit/web/cross-machine transparency end-to-end, and scaffold the post-wake clock-resync handler in `src/process/`
 - [ ] **Phase 7: User Documentation and CLI Reference Sync** - Ship `docs/sandbox/sbx.md` covering host-side prerequisites (`sbx login`, `sbx policy set-default`, `sbx secret set -g`), upgrade path, kit-format-experimental warning, and disk-usage note; regenerate `docs/cli/reference.md` via `cargo xtask gen-docs`
@@ -75,7 +75,11 @@ Plans:
   3. `cargo xtask check-kit` parses the embedded `spec.yaml`, asserts `schemaVersion == "1"`, and fails the build if any required field is missing or any `commands.startup[*].command` contains an install verb (`apt-get`, `npm install -g`, etc.) without an idempotency guard
   4. The kit's status-hook shim writes to `<workspace>/.aoe-hooks/<id>/status` (NOT `/tmp/aoe-hooks/`), verified by inspecting the materialized shim file content; a `.gitignore` for `.aoe-hooks/` is dropped into the workspace by the kit
   5. The materialized kit invocation shape `sbx create shell --kit <materialized-path> --template <user's image>` passes argv-builder tests (kit path resolved from `KitMaterializer`, template from `default_sandbox_image()`)
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [x] 04-01-PLAN.md — Author src/containers/sbx_kit/ embedded assets (spec.yaml + hook-shim.sh + gitignore + per-agent settings.json) and src/containers/sbx/kit.rs KitMaterializer with atomic-rename cache + 30-day GC; covers KIT-01, KIT-02, KIT-03, KIT-05, and the in-VM half of KIT-04
+- [x] 04-02-PLAN.md — Add sbx_hook_status_dir + capability-driven dispatch shim through 7 call sites, plus cargo xtask check-kit subcommand + CI kit job; covers KIT-06 and the host-side half of KIT-04
+- [ ] 04-03-PLAN.md — Gap closure: fix 3 spec.yaml schema errors (kind: mixin, string install commands, env-based SSH credentials) found by sbx kit validate UAT; update linter and fixtures
 
 ### Phase 5: Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish)
 **Goal**: `SbxRuntime` calls real `sbx` subprocesses end-to-end. `create_container` invokes `sbx create shell --kit ... --template ... [PATH ...]`, polls `sbx ls --json` for readiness with exponential backoff (max 30s), then runs the per-port `sbx ports SANDBOX --publish` loop with per-port error capture (failures aggregate into `Vec<(port, error)>`, sandbox is NOT rolled back). `exec_command` builds `sbx exec [-i] [-t] [-e] [-w]` with up-to-3-attempt retry on first-exec "sandbox not ready" stderr. `stop_container` runs `sbx stop`; `remove` runs `sbx rm [-f]`; batch state parses `sbx ls --json` with `#[serde(default)]` defensiveness. `is_daemon_running` is a composite probe (`sbx version` + `sbx ls --json` parseable) returning typed `SbxNotConfigured` on auth/policy stderr substrings.
@@ -124,7 +128,7 @@ Phases execute in numeric order: 1, 2, 3, 4, 5, 6, 7
 | 1. Capability Surface and Trait Foundation | 2/2 | Complete   | 2026-05-15 |
 | 2. SbxRuntime Skeleton and Pure Argv Builders | 2/2 | Complete   | 2026-05-15 |
 | 3. container_config Capability Gating and Workspace Path Conformance | 2/2 | Complete   | 2026-05-16 |
-| 4. Embedded sbx Kit and Materialization | 0/TBD | Not started | - |
+| 4. Embedded sbx Kit and Materialization | 2/3 | Gap closure | 2026-05-16 |
 | 5. Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish) | 0/TBD | Not started | - |
 | 6. Settings TUI, Cross-Machine Integration, and Sleep/Wake | 0/TBD | Not started | - |
 | 7. User Documentation and CLI Reference Sync | 0/TBD | Not started | - |
