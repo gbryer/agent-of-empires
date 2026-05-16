@@ -5,6 +5,7 @@ use crate::containers::container_interface::RuntimeCapabilities;
 use crate::containers::runtime_base::RuntimeBase;
 
 pub mod argv;
+pub mod kit;
 
 /// Peer struct for the Docker Sandboxes (`sbx`) backend. Phase 2 plan 02-01
 /// owns the skeleton: an injectable binary path, an availability probe, and a
