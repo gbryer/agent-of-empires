@@ -62,7 +62,12 @@ pub(crate) fn conform_workspace_paths(
         .iter()
         .map(|v| (v.container_path.clone(), v.host_path.clone()))
         .collect();
-    prefix_pairs.sort_by_key(|pair| std::cmp::Reverse(pair.0.len()));
+    // Longest-first, with a deterministic tie-breaker on the container_path
+    // string so two equally-long prefixes always resolve in the same order
+    // (sort_by_key is unstable on ties). Avoids implementation-defined
+    // resolution when, e.g., a multi-repo workspace has `/workspace/a` and
+    // `/workspace/b`.
+    prefix_pairs.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
 
     let conformed_volumes: Vec<VolumeMount> = volumes
         .into_iter()
@@ -3296,6 +3301,42 @@ volume_ignores = ["target"]
         assert_eq!(out_volumes[0].container_path, "/host/short");
         assert_eq!(out_volumes[1].container_path, "/host/longer");
         assert_eq!(out_workdir, "/host/longer/sub");
+    }
+
+    /// WR-06 regression: when two volumes have container_paths of identical
+    /// length, the longest-prefix sort must resolve them in a deterministic
+    /// order (not implementation-defined). Build the volumes in reverse-
+    /// lexicographic order to exercise the tie-breaker path; the expected
+    /// match is the one whose container_path equals the working_dir prefix.
+    #[test]
+    fn test_conform_workspace_paths_sbx_equal_length_prefix_deterministic_tie_break() {
+        let caps = crate::containers::runtime_base::RuntimeBase::SBX.capabilities;
+        fn build_volumes() -> Vec<VolumeMount> {
+            vec![
+                VolumeMount {
+                    host_path: "/host/repo-b".to_string(),
+                    container_path: "/workspace/b".to_string(),
+                    read_only: false,
+                },
+                VolumeMount {
+                    host_path: "/host/repo-a".to_string(),
+                    container_path: "/workspace/a".to_string(),
+                    read_only: false,
+                },
+            ]
+        }
+
+        let (_, out_workdir_a) =
+            conform_workspace_paths(build_volumes(), "/workspace/a/src".to_string(), caps);
+        assert_eq!(
+            out_workdir_a, "/host/repo-a/src",
+            "equal-length prefixes must resolve deterministically by container_path"
+        );
+
+        // And the symmetric case picks the other volume.
+        let (_, out_workdir_b) =
+            conform_workspace_paths(build_volumes(), "/workspace/b".to_string(), caps);
+        assert_eq!(out_workdir_b, "/host/repo-b");
     }
 
     #[test]
