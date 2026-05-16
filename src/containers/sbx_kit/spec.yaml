@@ -4,6 +4,7 @@ name: aoe-agent
 
 commands:
   install:
+    - command: "apt-get update -qq && apt-get install -y -qq socat >/dev/null 2>&1 || apk add --no-cache socat >/dev/null 2>&1 || true"
     - command: "sh /sbx-kit/install.sh"
     - command: "grep -qsE '^\\.aoe-hooks/?$' \"${WORKDIR}/.gitignore\" || printf '\\n.aoe-hooks/\\n' >> \"${WORKDIR}/.gitignore\""
   startup:

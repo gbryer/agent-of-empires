@@ -87,16 +87,14 @@ impl SbxRuntime {
         }
     }
 
-    /// Exponential backoff waiting for a sandbox to reach "running" or "created"
-    /// state (D-07, D-08). Total budget ~25s across 7 attempts.
+    /// Exponential backoff waiting for a sandbox to appear in `sbx ls`.
+    /// After `sbx create`, status is "stopped" — it becomes "running" when
+    /// the terminal attaches via `sbx run`.
     fn wait_for_ready(&self, name: &str) -> ContainerResult<()> {
         let delays = [200, 400, 800, 1600, 3200, 6400, 12800];
         for delay in &delays {
-            match self.sandbox_status(name) {
-                Ok(status) if status == "running" || status == "created" => {
-                    return Ok(());
-                }
-                _ => {}
+            if self.sandbox_status(name).is_ok() {
+                return Ok(());
             }
             std::thread::sleep(Duration::from_millis(*delay));
         }
@@ -106,8 +104,8 @@ impl SbxRuntime {
         )))
     }
 
-    /// Create a sandbox via `sbx create shell`, materializing the kit first
-    /// (D-15). Blocks until the sandbox reaches a ready state.
+    /// Create a sandbox via `sbx create shell`. The sandbox starts in "stopped"
+    /// state; it becomes "running" when the terminal attaches via `sbx run`.
     pub fn create_container(
         &self,
         name: &str,
@@ -152,7 +150,8 @@ impl SbxRuntime {
         Ok(name.to_string())
     }
 
-    /// No-op: sbx auto-starts on first exec (D-14).
+    /// No-op: sbx sandboxes auto-start when the terminal attaches via
+    /// `sbx run` or when `sbx exec` is called.
     pub fn start_container(&self, _name: &str) -> ContainerResult<()> {
         Ok(())
     }

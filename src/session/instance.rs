@@ -987,9 +987,15 @@ impl Instance {
                 sandbox,
                 std::path::Path::new(&self.project_path),
             );
+            let runtime = containers::get_container_runtime();
+            let workdir_part = if !runtime.capabilities().supports_arbitrary_volume_paths {
+                format!("-w {} ", self.container_workdir_now())
+            } else {
+                String::new()
+            };
             // AOE_INSTANCE_ID is not secret, goes directly in docker args
             let docker_args = format!("{} -e AOE_INSTANCE_ID={}", env_info.docker_args, self.id);
-            let env_part = format!("{} ", docker_args);
+            let env_part = format!("{}{} ", workdir_part, docker_args);
             let wrapped =
                 wrap_command_ignore_suspend(&container.exec_command(Some(&env_part), &tool_cmd));
             Some(prepend_exports(&env_info.exports, wrapped))
