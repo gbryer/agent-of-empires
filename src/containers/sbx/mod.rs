@@ -361,6 +361,7 @@ impl SbxRuntime {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use std::io::Write;
