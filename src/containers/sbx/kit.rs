@@ -511,7 +511,7 @@ mod tests {
             port_mappings: vec![],
             agent_name: None,
         };
-        let args = build_create_args("aoe-test", "alpine:latest", Some(&target), &cfg);
+        let args = build_create_args("aoe-test", "alpine:latest", Some(&target), &cfg, None);
         let kit_pos = args
             .iter()
             .position(|a| a == "--kit")

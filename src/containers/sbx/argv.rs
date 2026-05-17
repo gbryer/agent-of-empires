@@ -26,6 +26,7 @@ pub fn build_create_args(
     image: &str,
     kit_path: Option<&Path>,
     config: &ContainerConfig,
+    ssh_auth_sock: Option<&str>,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "create".to_string(),
@@ -49,6 +50,11 @@ pub fn build_create_args(
     if let Some(mem) = &config.memory_limit {
         args.push("-m".to_string());
         args.push(mem.clone());
+    }
+
+    if let Some(sock) = ssh_auth_sock {
+        args.push("-e".to_string());
+        args.push(format!("SSH_AUTH_SOCK={}", sock));
     }
 
     for vol in &config.volumes {
@@ -138,7 +144,7 @@ mod tests {
     #[test]
     fn create_args_minimal() {
         let cfg = empty_config();
-        let args = build_create_args("aoe-sandbox-test", "alpine:latest", None, &cfg);
+        let args = build_create_args("aoe-sandbox-test", "alpine:latest", None, &cfg, None);
         assert_eq!(
             args,
             vec![
@@ -159,7 +165,7 @@ mod tests {
     fn create_args_with_kit() {
         let cfg = empty_config();
         let kp = Path::new("/var/cache/aoe/sbx-kit/v1");
-        let args = build_create_args("s", "alpine:latest", Some(kp), &cfg);
+        let args = build_create_args("s", "alpine:latest", Some(kp), &cfg, None);
         let kit_pos = args.iter().position(|a| a == "--kit").unwrap();
         assert_eq!(args[kit_pos + 1], "/var/cache/aoe/sbx-kit/v1");
         let name_pos = args.iter().position(|a| a == "--name").unwrap();
@@ -173,7 +179,7 @@ mod tests {
         let mut cfg = empty_config();
         cfg.cpu_limit = Some("2".to_string());
         cfg.memory_limit = Some("4g".to_string());
-        let args = build_create_args("s", "alpine:latest", None, &cfg);
+        let args = build_create_args("s", "alpine:latest", None, &cfg, None);
         let tmpl_pos = args.iter().position(|a| a == "--template").unwrap();
         let cpus_pos = args.iter().position(|a| a == "--cpus").unwrap();
         let mem_pos = args.iter().position(|a| a == "-m").unwrap();
@@ -191,7 +197,7 @@ mod tests {
             container_path: "/work/proj".to_string(),
             read_only: false,
         }];
-        let args = build_create_args("s", "alpine:latest", None, &cfg);
+        let args = build_create_args("s", "alpine:latest", None, &cfg, None);
         assert_eq!(args.last().unwrap(), "/work/proj");
         assert!(!args.iter().any(|a| a.ends_with(":ro")));
     }
@@ -204,7 +210,7 @@ mod tests {
             container_path: "/work/proj".to_string(),
             read_only: true,
         }];
-        let args = build_create_args("s", "alpine:latest", None, &cfg);
+        let args = build_create_args("s", "alpine:latest", None, &cfg, None);
         assert_eq!(args.last().unwrap(), "/work/proj:ro");
     }
 
@@ -223,7 +229,7 @@ mod tests {
                 read_only: true,
             },
         ];
-        let args = build_create_args("s", "alpine:latest", None, &cfg);
+        let args = build_create_args("s", "alpine:latest", None, &cfg, None);
         let a_pos = args.iter().position(|a| a == "/a").unwrap();
         let b_pos = args.iter().position(|a| a == "/b:ro").unwrap();
         assert!(a_pos < b_pos);
@@ -233,7 +239,7 @@ mod tests {
     fn create_args_skips_anonymous_volumes() {
         let mut cfg = empty_config();
         cfg.anonymous_volumes = vec!["/tmp/cache".to_string()];
-        let args = build_create_args("s", "alpine:latest", None, &cfg);
+        let args = build_create_args("s", "alpine:latest", None, &cfg, None);
         assert!(!args.iter().any(|a| a == "/tmp/cache"));
     }
 
@@ -241,7 +247,7 @@ mod tests {
     fn create_args_skips_port_mappings() {
         let mut cfg = empty_config();
         cfg.port_mappings = vec!["3000:3000".to_string()];
-        let args = build_create_args("s", "alpine:latest", None, &cfg);
+        let args = build_create_args("s", "alpine:latest", None, &cfg, None);
         assert!(!args.iter().any(|a| a == "-p"));
         assert!(!args.iter().any(|a| a == "3000:3000"));
     }
@@ -438,5 +444,22 @@ mod tests {
                 "3000:3000/tcp".to_string(),
             ]
         );
+    }
+
+    // -------- SSH_AUTH_SOCK in create args --------
+
+    #[test]
+    fn create_args_with_ssh_auth_sock() {
+        let cfg = empty_config();
+        let args = build_create_args("s", "alpine:latest", None, &cfg, Some("/tmp/agent.sock"));
+        let e_pos = args.iter().position(|a| a == "-e").unwrap();
+        assert_eq!(args[e_pos + 1], "SSH_AUTH_SOCK=/tmp/agent.sock");
+    }
+
+    #[test]
+    fn create_args_without_ssh_auth_sock() {
+        let cfg = empty_config();
+        let args = build_create_args("s", "alpine:latest", None, &cfg, None);
+        assert!(!args.iter().any(|a| a.contains("SSH_AUTH_SOCK")));
     }
 }
