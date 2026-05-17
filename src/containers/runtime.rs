@@ -242,13 +242,8 @@ impl ContainerRuntimeInterface for ContainerRuntime {
         match self.kind {
             RuntimeKind::Sbx => {
                 // Prefer explicit agent_name from ContainerConfig (threaded
-                // from session layer), fall back to parsing the aoe container
-                // name convention (aoe_<agent>_<uuid>).
-                let agent_name = config.agent_name.as_deref().unwrap_or_else(|| {
-                    name.strip_prefix("aoe-sandbox-")
-                        .and_then(|rest| rest.split('-').next())
-                        .unwrap_or("claude")
-                });
+                // from session layer); default to "claude" when unset.
+                let agent_name = config.agent_name.as_deref().unwrap_or("claude");
                 let sbx_rt = self.sbx.as_ref().expect(
                     "ContainerRuntime::sbx() invariant: sbx field is Some when kind == Sbx",
                 );
