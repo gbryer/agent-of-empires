@@ -82,6 +82,29 @@ impl ContainerRuntime {
             RuntimeKind::Sbx => ContainerRuntimeName::Sbx,
         }
     }
+
+    /// Inject agent config files into an sbx sandbox via `sbx cp`. No-op for
+    /// non-sbx runtimes (they use bind mounts). Called after create and on
+    /// reattach (after `refresh_agent_configs` updates the host staging dir).
+    pub fn inject_agent_config(&self, container_name: &str, agent_name: &str) {
+        let sbx_rt = match (&self.kind, &self.sbx) {
+            (RuntimeKind::Sbx, Some(rt)) => rt,
+            _ => return,
+        };
+        let copies = crate::session::container_config::sbx_agent_config_copies(agent_name);
+        for copy in &copies {
+            if let Err(e) = sbx_rt.cp(&copy.host_path, container_name, &copy.container_path) {
+                tracing::warn!(
+                    target: "containers.sbx",
+                    name = %container_name,
+                    src = %copy.host_path.display(),
+                    dst = %copy.container_path,
+                    error = %e,
+                    "agent config injection failed (non-fatal)"
+                );
+            }
+        }
+    }
 }
 
 impl Default for ContainerRuntime {
@@ -272,6 +295,8 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                         }
                     }
                 }
+
+                self.inject_agent_config(name, agent_name);
 
                 Ok(result)
             }

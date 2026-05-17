@@ -102,6 +102,9 @@ fn rewrite_workdir(working_dir: &str, prefix_pairs: &[(String, String)]) -> Stri
 /// Subdirectory name inside each agent's config dir for the shared sandbox config.
 const SANDBOX_SUBDIR: &str = "sandbox";
 
+/// Home directory inside the container. Used for mount targets and sbx cp destinations.
+const CONTAINER_HOME: &str = "/root";
+
 /// Content seeded into the Claude sandbox `.sandbox-gitconfig`. Scoped to github.com;
 /// the helper emits credentials only on `get` and only when GH_TOKEN is non-empty, so
 /// other remotes and sessions without a forwarded token fall through to normal git
@@ -435,8 +438,6 @@ fn sync_agent_config(
 }
 
 fn rewrite_claude_plugin_paths(sandbox_dir: &Path, host_home: &Path) -> Result<()> {
-    const CONTAINER_HOME: &str = "/root";
-
     let plugins_dir = sandbox_dir.join("plugins");
     if !plugins_dir.exists() {
         return Ok(());
@@ -918,6 +919,153 @@ pub(crate) fn refresh_agent_configs() {
     }
 }
 
+/// A host→container copy operation for sbx agent config injection.
+pub(crate) struct SbxConfigCopy {
+    pub host_path: PathBuf,
+    /// Destination inside the sandbox (directory for entries, full path for merged files).
+    pub container_path: String,
+}
+
+/// Compute the list of host→container copy operations needed to inject
+/// agent config into an sbx sandbox after creation. The staging directory
+/// was prepared by `prepare_sandbox_dir` during `build_container_config`;
+/// sbx's `conform_for_capabilities` drops the bind mounts (host_path !=
+/// container_path), so we copy them in via `sbx cp` instead.
+///
+/// Also copies `.gitconfig` and GCP credentials (for Vertex AI), which are
+/// dropped by the same conformance pass.
+///
+/// `settings.json` is handled specially: the staging version contains
+/// Docker-format hooks (writing to `/tmp/aoe-hooks/`), but sbx hooks write
+/// to `${WORKDIR}/.aoe-hooks/`. A merged file is written to a temp path
+/// that combines the user's non-hook settings with the sbx-specific hooks.
+pub(crate) fn sbx_agent_config_copies(tool: &str) -> Vec<SbxConfigCopy> {
+    let Some(home) = dirs::home_dir() else {
+        return vec![];
+    };
+    let mut copies = Vec::new();
+
+    // .gitconfig — dropped by conform_for_capabilities (file mount, paths differ)
+    let gitconfig = home.join(".gitconfig");
+    if gitconfig.exists() {
+        copies.push(SbxConfigCopy {
+            host_path: gitconfig,
+            container_path: format!("{}/.gitconfig", CONTAINER_HOME),
+        });
+    }
+
+    // GCP credentials for Vertex AI (Claude-only, mirrors build_container_config)
+    if tool == "claude" && super::environment::host_vertex_enabled() {
+        let cred_path = if let Ok(custom) = std::env::var("GOOGLE_APPLICATION_CREDENTIALS") {
+            let p = PathBuf::from(&custom);
+            if p.exists() {
+                Some(p)
+            } else {
+                None
+            }
+        } else {
+            let default = home.join(".config/gcloud/application_default_credentials.json");
+            if default.exists() {
+                Some(default)
+            } else {
+                None
+            }
+        };
+        if let Some(path) = cred_path {
+            copies.push(SbxConfigCopy {
+                host_path: path,
+                container_path: format!(
+                    "{}/.config/gcloud/application_default_credentials.json",
+                    CONTAINER_HOME
+                ),
+            });
+        }
+    }
+
+    for mount in AGENT_CONFIG_MOUNTS.iter().filter(|m| m.tool_name == tool) {
+        let staging_dir = home.join(mount.host_rel).join(SANDBOX_SUBDIR);
+        if !staging_dir.exists() {
+            continue;
+        }
+
+        let container_config_dir = format!("{}/{}", CONTAINER_HOME, mount.container_suffix);
+
+        let Ok(entries) = std::fs::read_dir(&staging_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let fname = entry.file_name();
+            let fname_str = fname.to_string_lossy();
+
+            let is_home_seed = mount
+                .home_seed_files
+                .iter()
+                .any(|&(f, _)| f == fname_str.as_ref());
+
+            // settings.json needs sbx-specific hooks; handle below
+            if fname_str == "settings.json" {
+                continue;
+            }
+
+            let dest = if is_home_seed {
+                format!("{}/", CONTAINER_HOME)
+            } else {
+                format!("{}/", container_config_dir)
+            };
+
+            copies.push(SbxConfigCopy {
+                host_path: entry.path(),
+                container_path: dest,
+            });
+        }
+
+        // Build a merged settings.json with user config + sbx hooks.
+        // Written to a sidecar file; container_path is the full destination
+        // so sbx cp renames it to settings.json on copy.
+        if let Some(merged_path) = build_sbx_merged_settings(&staging_dir, tool) {
+            copies.push(SbxConfigCopy {
+                host_path: merged_path,
+                container_path: format!("{}/settings.json", container_config_dir),
+            });
+        }
+    }
+    copies
+}
+
+/// Build a merged settings.json: user settings from the staging dir with
+/// hooks replaced by sbx-specific hooks from the embedded kit settings.
+/// Returns the path to a temp file in the staging dir, or None if no
+/// settings.json exists in the staging dir.
+fn build_sbx_merged_settings(staging_dir: &Path, tool: &str) -> Option<PathBuf> {
+    let settings_path = staging_dir.join("settings.json");
+    let content = std::fs::read_to_string(&settings_path).ok()?;
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
+
+    let sbx_hooks_str = match tool {
+        "claude" => Some(crate::containers::sbx::kit::SETTINGS_CLAUDE),
+        "gemini" => Some(crate::containers::sbx::kit::SETTINGS_GEMINI),
+        "cursor" => Some(crate::containers::sbx::kit::SETTINGS_CURSOR),
+        "qwen" => Some(crate::containers::sbx::kit::SETTINGS_QWEN),
+        _ => None,
+    };
+
+    if let Some(hooks_str) = sbx_hooks_str {
+        if let Ok(sbx_settings) = serde_json::from_str::<serde_json::Value>(hooks_str) {
+            if let Some(hooks) = sbx_settings.get("hooks") {
+                settings["hooks"] = hooks.clone();
+            }
+        }
+    } else if let Some(obj) = settings.as_object_mut() {
+        obj.remove("hooks");
+    }
+
+    let merged_path = staging_dir.join(".aoe-sbx-settings.json");
+    let merged_content = serde_json::to_string_pretty(&settings).ok()?;
+    std::fs::write(&merged_path, &merged_content).ok()?;
+    Some(merged_path)
+}
+
 /// Build a full `ContainerConfig` for creating a sandboxed container.
 ///
 /// `profile` selects which profile's overrides (volumes, mount_ssh, volume_ignores)
@@ -991,8 +1139,6 @@ pub(crate) fn build_container_config(
             }
         }
     };
-
-    const CONTAINER_HOME: &str = "/root";
 
     let gitconfig = home.join(".gitconfig");
     if gitconfig.exists() {
@@ -4081,6 +4227,86 @@ volume_ignores = [".venv", "node_modules"]
             sbx_workdir, expected_sbx_host,
             "workspace_info-aware dispatch: sbx exec-time workdir must equal the workspace mount host_path; got {} vs {}",
             sbx_workdir, expected_sbx_host
+        );
+    }
+
+    // --- sbx_agent_config_copies tests ---
+
+    #[test]
+    fn test_build_sbx_merged_settings_replaces_hooks() {
+        let dir = TempDir::new().unwrap();
+        let staging = dir.path();
+
+        // Write a settings.json with Docker-style hooks and user config
+        let docker_settings = serde_json::json!({
+            "permissions": {"allow": ["Read", "Write"]},
+            "hooks": {
+                "PreToolUse": [{
+                    "hooks": [{"type": "command", "command": "sh -c 'printf running > /tmp/aoe-hooks/$AOE_INSTANCE_ID/status'"}]
+                }]
+            }
+        });
+        fs::write(
+            staging.join("settings.json"),
+            serde_json::to_string_pretty(&docker_settings).unwrap(),
+        )
+        .unwrap();
+
+        let merged_path = build_sbx_merged_settings(staging, "claude").unwrap();
+        let merged: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&merged_path).unwrap()).unwrap();
+
+        // User settings preserved
+        assert_eq!(
+            merged["permissions"]["allow"][0], "Read",
+            "user permissions should be preserved"
+        );
+
+        // Hooks replaced with sbx-specific ones
+        let hook_cmd = merged["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(
+            hook_cmd.contains("${WORKDIR}/.aoe-hooks"),
+            "hooks should use WORKDIR-relative path, got: {}",
+            hook_cmd
+        );
+        assert!(
+            !hook_cmd.contains("/tmp/aoe-hooks"),
+            "Docker-style /tmp path should be replaced"
+        );
+    }
+
+    #[test]
+    fn test_build_sbx_merged_settings_returns_none_when_no_settings() {
+        let dir = TempDir::new().unwrap();
+        assert!(
+            build_sbx_merged_settings(dir.path(), "claude").is_none(),
+            "should return None when settings.json doesn't exist"
+        );
+    }
+
+    #[test]
+    fn test_build_sbx_merged_settings_removes_hooks_for_unknown_agent() {
+        let dir = TempDir::new().unwrap();
+        let settings = serde_json::json!({
+            "some_setting": true,
+            "hooks": {"PreToolUse": []}
+        });
+        fs::write(
+            dir.path().join("settings.json"),
+            serde_json::to_string(&settings).unwrap(),
+        )
+        .unwrap();
+
+        let merged_path = build_sbx_merged_settings(dir.path(), "unknown-agent").unwrap();
+        let merged: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&merged_path).unwrap()).unwrap();
+
+        assert_eq!(merged["some_setting"], true);
+        assert!(
+            merged.get("hooks").is_none(),
+            "hooks should be removed for unknown agent"
         );
     }
 }

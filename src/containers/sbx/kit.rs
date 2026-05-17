@@ -19,10 +19,10 @@ const KIT_GC_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 
 const SPEC_YAML: &str = include_str!("../sbx_kit/spec.yaml");
 
-const SETTINGS_CLAUDE: &str = include_str!("../sbx_kit/settings-claude.json");
-const SETTINGS_GEMINI: &str = include_str!("../sbx_kit/settings-gemini.json");
-const SETTINGS_CURSOR: &str = include_str!("../sbx_kit/settings-cursor.json");
-const SETTINGS_QWEN: &str = include_str!("../sbx_kit/settings-qwen.json");
+pub(crate) const SETTINGS_CLAUDE: &str = include_str!("../sbx_kit/settings-claude.json");
+pub(crate) const SETTINGS_GEMINI: &str = include_str!("../sbx_kit/settings-gemini.json");
+pub(crate) const SETTINGS_CURSOR: &str = include_str!("../sbx_kit/settings-cursor.json");
+pub(crate) const SETTINGS_QWEN: &str = include_str!("../sbx_kit/settings-qwen.json");
 
 /// Agents whose `install_hint` cannot be applied headlessly inside an sbx
 /// microVM (Cursor and Copilot are doc-only pointers; settl is a Homebrew

@@ -1243,12 +1243,16 @@ impl Instance {
 
         if container.is_running()? {
             container_config::refresh_agent_configs();
+            let runtime = containers::get_container_runtime();
+            runtime.inject_agent_config(&container.name, &self.tool);
             return Ok(container);
         }
 
         if container.exists()? {
             container_config::refresh_agent_configs();
             container.start()?;
+            let runtime = containers::get_container_runtime();
+            runtime.inject_agent_config(&container.name, &self.tool);
             return Ok(container);
         }
 

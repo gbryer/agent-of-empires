@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
@@ -197,6 +197,19 @@ impl SbxRuntime {
                 format!(": {}", stderr_msg)
             }
         )))
+    }
+
+    /// Copy a file or directory from the host into a sandbox.
+    pub fn cp(
+        &self,
+        host_path: &Path,
+        sandbox_name: &str,
+        container_path: &str,
+    ) -> ContainerResult<()> {
+        let src = host_path.display().to_string();
+        let dst = format!("{}:{}", sandbox_name, container_path);
+        self.run(&["cp", &src, &dst])?;
+        Ok(())
     }
 
     pub fn stop_container(&self, name: &str) -> ContainerResult<()> {
@@ -569,5 +582,35 @@ exit 0
         assert_eq!(states.get("aoe-abc"), Some(&true));
         assert_eq!(states.get("aoe-def"), Some(&false));
         assert!(!states.contains_key("other-xyz"));
+    }
+
+    #[test]
+    fn test_cp_passes_correct_args() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_file = dir.path().join("args.log");
+        let script = format!(
+            "#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n",
+            log_file.display()
+        );
+        let path = make_mock_script(&dir, &script);
+        let sbx = SbxRuntime { binary: path };
+        sbx.cp(
+            Path::new("/host/config.json"),
+            "my-sandbox",
+            "/root/.claude/settings.json",
+        )
+        .unwrap();
+        let logged = std::fs::read_to_string(&log_file).unwrap();
+        assert!(logged.contains("cp"), "expected 'cp' in args: {}", logged);
+        assert!(
+            logged.contains("/host/config.json"),
+            "expected host path in args: {}",
+            logged
+        );
+        assert!(
+            logged.contains("my-sandbox:/root/.claude/settings.json"),
+            "expected sandbox:container_path in args: {}",
+            logged
+        );
     }
 }
