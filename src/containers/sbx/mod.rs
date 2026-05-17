@@ -119,14 +119,12 @@ impl SbxRuntime {
             DockerError::CommandFailed(format!("kit materialization failed: {}", e))
         })?;
 
-        let ssh_sock = std::env::var("SSH_AUTH_SOCK").ok();
-        let args =
-            argv::build_create_args(name, image, Some(&kit_path), config, ssh_sock.as_deref());
+        let args = argv::build_create_args(name, image, Some(&kit_path), config);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         let mut cmd = Command::new(&self.binary);
         cmd.args(&arg_refs);
-        if let Some(ref sock_path) = ssh_sock {
+        if let Ok(sock_path) = std::env::var("SSH_AUTH_SOCK") {
             cmd.env("SSH_AUTH_SOCK", sock_path);
         }
         for entry in &config.environment {

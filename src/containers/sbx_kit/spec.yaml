@@ -5,98 +5,61 @@ name: aoe-agent
 commands:
   install:
     - command: "apt-get update -qq && apt-get install -y -qq socat >/dev/null 2>&1 || apk add --no-cache socat >/dev/null 2>&1 || true"
-    - command: "sh /sbx-kit/install.sh"
     - command: "grep -qsE '^\\.aoe-hooks/?$' \"${WORKDIR}/.gitignore\" || printf '\\n.aoe-hooks/\\n' >> \"${WORKDIR}/.gitignore\""
+    - command: |
+        cat > /tmp/_aoe_hooks.py << 'PYEOF'
+        import json, os
+        H = os.environ["HOME"]
+        SH = "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s STATUS > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"
+        def hk(s, m=None):
+            e = {"hooks": [{"type": "command", "command": SH.replace("STATUS", s)}]}
+            if m: e["matcher"] = m
+            return [e]
+        agents = {
+            ".claude/settings.json": {
+                "PreToolUse": hk("running"),
+                "UserPromptSubmit": hk("running"),
+                "Stop": hk("idle"),
+                "Notification": hk("waiting", "permission_prompt|elicitation_dialog"),
+                "ElicitationResult": hk("running"),
+            },
+            ".gemini/settings.json": {
+                "BeforeTool": hk("running"),
+                "BeforeAgent": hk("running"),
+                "AfterAgent": hk("idle"),
+                "Notification": hk("waiting", "ToolPermission"),
+            },
+            ".cursor/settings.json": {
+                "PreToolUse": hk("running"),
+                "UserPromptSubmit": hk("running"),
+                "Stop": hk("idle"),
+                "Notification": hk("waiting", "permission_prompt|elicitation_dialog"),
+                "ElicitationResult": hk("running"),
+            },
+            ".qwen/settings.json": {
+                "PreToolUse": hk("running"),
+                "UserPromptSubmit": hk("running"),
+                "PostToolUse": hk("running"),
+                "Stop": hk("idle"),
+                "Notification": hk("waiting", "permission_prompt|elicitation_dialog"),
+            },
+        }
+        for rel, hooks in agents.items():
+            p = os.path.join(H, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            s = {}
+            if os.path.exists(p):
+                try: s = json.load(open(p))
+                except: pass
+            s["hooks"] = hooks
+            with open(p, "w") as f:
+                json.dump(s, f, indent=2)
+                f.write("\n")
+        PYEOF
+        python3 /tmp/_aoe_hooks.py && rm -f /tmp/_aoe_hooks.py
   startup:
     - command: ["sh", "-c", "export SSH_AUTH_SOCK=/run/ssh-agent.sock; [ -S \"$SSH_AUTH_SOCK\" ] && ssh-add -l >/dev/null 2>&1 || true"]
     - command: ["sh", "-c", "command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1 || command -v opencode >/dev/null 2>&1 || command -v gemini >/dev/null 2>&1 || command -v cursor >/dev/null 2>&1 || command -v droid >/dev/null 2>&1 || command -v pi >/dev/null 2>&1 || command -v qwen >/dev/null 2>&1 || command -v kiro-cli >/dev/null 2>&1 || command -v hermes >/dev/null 2>&1 || command -v vibe >/dev/null 2>&1 || (printf 'aoe-agent: no known agent binary on PATH\\n' >&2; exit 1)"]
-
-initFiles:
-  - path: /home/agent/.claude/settings.json
-    mode: "0644"
-    content: |
-      {
-        "hooks": {
-          "PreToolUse": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "UserPromptSubmit": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "Stop": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s idle > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "Notification": [
-            {"matcher": "permission_prompt|elicitation_dialog", "hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s waiting > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "ElicitationResult": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ]
-        }
-      }
-  - path: /home/agent/.gemini/settings.json
-    mode: "0644"
-    content: |
-      {
-        "hooks": {
-          "BeforeTool": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "BeforeAgent": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "AfterAgent": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s idle > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "Notification": [
-            {"matcher": "ToolPermission", "hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s waiting > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ]
-        }
-      }
-  - path: /home/agent/.cursor/settings.json
-    mode: "0644"
-    content: |
-      {
-        "hooks": {
-          "PreToolUse": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "UserPromptSubmit": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "Stop": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s idle > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "Notification": [
-            {"matcher": "permission_prompt|elicitation_dialog", "hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s waiting > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "ElicitationResult": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ]
-        }
-      }
-  - path: /home/agent/.qwen/settings.json
-    mode: "0644"
-    content: |
-      {
-        "hooks": {
-          "PreToolUse": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "UserPromptSubmit": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "PostToolUse": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "Stop": [
-            {"hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s idle > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ],
-          "Notification": [
-            {"matcher": "permission_prompt|elicitation_dialog", "hooks": [{"type": "command", "command": "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s waiting > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"}]}
-          ]
-        }
-      }
 
 environment:
   proxyManaged:

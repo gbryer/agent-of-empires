@@ -353,44 +353,11 @@ mod tests {
     }
 
     #[test]
-    fn spec_yaml_hook_shim_uses_workspace_path() {
-        let dir = temp_app_dir();
-        let target = ensure_with_app_dir(dir.path(), "claude").unwrap();
-        let spec_raw = std::fs::read_to_string(target.join("spec.yaml")).unwrap();
-        let spec: serde_yaml::Value = serde_yaml::from_str(&spec_raw).unwrap();
-        let init_files = spec
-            .get("initFiles")
-            .and_then(|v| v.as_sequence())
-            .expect("initFiles missing");
-        let any_matches = init_files.iter().any(|entry| {
-            entry
-                .get("content")
-                .and_then(|c| c.as_str())
-                .map(|s| s.contains("${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status"))
-                .unwrap_or(false)
-        });
-        assert!(any_matches, "no initFiles content has WORKDIR-rooted shim");
-    }
-
-    #[test]
-    fn spec_yaml_no_workdir_in_paths() {
-        let dir = temp_app_dir();
-        let target = ensure_with_app_dir(dir.path(), "claude").unwrap();
-        let spec_raw = std::fs::read_to_string(target.join("spec.yaml")).unwrap();
-        let spec: serde_yaml::Value = serde_yaml::from_str(&spec_raw).unwrap();
-        for entry in spec
-            .get("initFiles")
-            .and_then(|v| v.as_sequence())
-            .into_iter()
-            .flatten()
-        {
-            let path = entry.get("path").and_then(|p| p.as_str()).unwrap_or("");
-            assert!(
-                !path.contains("${WORKDIR}"),
-                "initFiles entry path contains WORKDIR placeholder: {}",
-                path
-            );
-        }
+    fn spec_yaml_install_command_writes_hooks_with_workspace_path() {
+        assert!(
+            SPEC_YAML.contains("${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID"),
+            "spec.yaml install command missing WORKDIR-rooted hook shim"
+        );
     }
 
     #[test]
@@ -520,7 +487,7 @@ mod tests {
             port_mappings: vec![],
             agent_name: None,
         };
-        let args = build_create_args("aoe-test", "alpine:latest", Some(&target), &cfg, None);
+        let args = build_create_args("aoe-test", "alpine:latest", Some(&target), &cfg);
         let kit_pos = args
             .iter()
             .position(|a| a == "--kit")

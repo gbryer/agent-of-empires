@@ -1084,7 +1084,8 @@ impl Instance {
             }
         } else if let Some(hook_cfg) = agent.and_then(|a| a.hook_config.as_ref()) {
             if self.is_sandboxed() {
-                // For sandboxed sessions, hooks are installed via build_container_config
+                // Sandbox hooks are installed by install_sandbox_hooks()
+                // after the container is running.
             } else {
                 // Install hooks in the user's home directory settings
                 if let Some(home) = dirs::home_dir() {

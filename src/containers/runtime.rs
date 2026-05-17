@@ -224,7 +224,7 @@ impl ContainerRuntimeInterface for ContainerRuntime {
                 // RuntimeBase::build_create_args which would emit Docker shape.
                 // kit_path is None until Phase 4's KitMaterializer feeds it
                 // through.
-                sbx::argv::build_create_args(name, image, None, config, None)
+                sbx::argv::build_create_args(name, image, None, config)
             }
             _ => self.base.build_create_args(name, image, config),
         }
