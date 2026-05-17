@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. `cargo build` succeeds on macOS arm64 and Linux x86_64 with `Sbx` added as a `ContainerRuntimeName` variant (no impl yet); `is_available()` for sbx returns false on every platform until Phase 2 lands
   4. No new `#[cfg(target_os = ...)]` branches appear in `src/containers/` or `src/session/`; any OS-specific scaffolding for the sleep/wake handler (Phase 6) lives only in `src/process/macos.rs` / `src/process/linux.rs`
   5. `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo deny check` all pass with the trait change applied
-**Plans**: 2 plans
+**Plans**: 3 plans
 Plans:
 - [x] 01-01-PLAN.md — Add `RuntimeCapabilities` struct, migrate `RuntimeBase` to single `capabilities` field, declare honest 7-flag matrix on Docker/Podman/AppleContainer, add per-backend matrix tests
 - [x] 01-02-PLAN.md — Add `ContainerRuntimeName::Sbx`, `RuntimeKind::Sbx`, `RuntimeBase::SBX`, `ContainerRuntime::sbx()`; add safe-stub dispatch arms; short-circuit `is_available` to `false`; wire factory functions
@@ -46,7 +46,7 @@ Plans:
   2. `SbxRuntime::capabilities()` returns the five new flags with sbx-correct values (`supports_port_publish_at_create=false`, `supports_image_pull=false`, `supports_anonymous_volumes=false`, `supports_arbitrary_volume_paths=false`, `supports_dynamic_port_publish=true`) and is verified by unit test
   3. `SbxRuntime::is_available()` returns false when `sbx` is absent from `PATH` and true when present (validated via a unit test that injects a fake binary path)
   4. Trait dispatch through the new `RuntimeHandle::Sbx(SbxRuntime)` variant compiles and routes every `ContainerRuntimeInterface` method to `SbxRuntime` without a regression in existing `ContainerRuntime` (Docker/Podman/AppleContainer) behavior
-**Plans**: 2 plans
+**Plans**: 3 plans
 Plans:
 - [x] 02-01-PLAN.md — Stand up `src/containers/sbx/{mod.rs, argv.rs}`: SbxRuntime peer struct with injectable binary, three pure argv builders (build_create_args / build_exec_args / build_ports_args), >=10 in-module argv-shape tests covering SC-1/SC-2/SC-3
 - [x] 02-02-PLAN.md — Update three `RuntimeKind::Sbx` dispatch arms in `src/containers/runtime.rs` (is_available, exec_command, build_create_args) to route through the new sbx module; add `sbx: Option<SbxRuntime>` storage field; strengthen sbx dispatch tests for SC-4
@@ -60,7 +60,7 @@ Plans:
   2. With Docker capability constants, `build_container_config` produces output identical to the pre-Phase-3 baseline (verified by snapshot test against pre-existing fixtures); no regression to existing runtimes
   3. A workspace + `volume_ignores` combination that cannot be conformed to `host_path == container_path` returns `Err` with a typed variant naming the offending mount (verified by unit test)
   4. `instance.rs::get_container_for_instance` skips the `runtime.ensure_image()` call when `!supports_image_pull` (verified by unit test with a mock runtime), and the existing Docker path still calls `ensure_image` unchanged
-**Plans**: 2 plans
+**Plans**: 3 plans
 Plans:
 - [x] 03-01-PLAN.md; Add ContainerConfigError + conform_workspace_paths helper + conform_for_capabilities post-pass; thread capabilities + ContainerRuntimeName into build_container_config; add SC-1/SC-2/SC-3 tests
 - [x] 03-02-PLAN.md; Add ensure_image capability guard at instance.rs:1249-1250; thread capabilities through Instance::container_workdir + 19 call sites via container_workdir_now helper; add SC-4 source-substring + matrix-assertion + workdir-threading tests
@@ -92,7 +92,7 @@ Plans:
   4. `is_daemon_running` returns typed `SbxNotConfigured(reason)` when stderr matches "not logged in" / "policy not configured" substrings (verified by unit test with mocked stderr); never spawns `sbx login` from inside aoe
   5. The manual-test plan (`.planning/manual-tests/sbx.md` or equivalent) documents the cockpit/web/cross-machine session-creation walkthroughs, sleep/wake clock-drift behavior to validate by hand, and host-side disk-usage growth observation across many sandboxes
   6. `cargo test sbx::parse` passes against a committed `tests/fixtures/sbx_ls.json` snapshot, with every deserializer field annotated `#[serde(default)]`
-**Plans**: 2 plans
+**Plans**: 3 plans
 Plans:
 - [ ] 05-01-PLAN.md — Core SbxRuntime action verbs (parse module, ports module, create/exec/stop/rm/daemon health, unit tests)
 - [ ] 05-02-PLAN.md — Dispatch arm replacement, session-layer publish_ports call, integration test, manual test plan
@@ -108,10 +108,11 @@ Plans:
   4. Creating a sandboxed session through the web dashboard's new-session API with `container_runtime=sbx` succeeds, returns a `Running` status, and the WebSocket PTY relay attaches to the running `sbx exec` process; no sbx-specific branch appears in `src/server/` or `src/cockpit/` (verified by inspection plus a `cargo test --features serve --test web_session_create -- --ignored` integration test)
   5. After a simulated macOS sleep/wake event (or the Linux `org.freedesktop.login1.Manager` `PrepareForSleep` signal in test), the sleep/wake handler in `src/process/macos.rs` / `src/process/linux.rs` invokes a clock-resync `sbx exec sandbox` call against every sbx-backed running session that was alive longer than 5min before sleep (verified by unit test with mocked sleep events)
   6. `cargo test --test e2e sbx_runtime_selector -- --ignored` passes the new TUI / CLI surface coverage: the runtime dropdown shows `Sbx` and `aoe sandbox runtime sbx` (or whatever clap subcommand surfaces) succeeds
-**Plans**: 2 plans
+**Plans**: 3 plans
 Plans:
-- [ ] 06-01-PLAN.md — Capability-driven field visibility filter in build_sandbox_fields + cross-product test + e2e sbx runtime selector + web session integration test
-- [ ] 06-02-PLAN.md — Sleep/wake handler (IOKit on macOS, D-Bus/busctl on Linux) with resync_sbx_clocks logic and unit tests
+- [x] 06-01-PLAN.md — Capability-driven field visibility filter in build_sandbox_fields + cross-product test + e2e sbx runtime selector + web session integration test
+- [x] 06-02-PLAN.md — Sleep/wake handler (IOKit on macOS, D-Bus/busctl on Linux) with resync_sbx_clocks logic and unit tests
+- [ ] 06-03-PLAN.md — Gap closure: sbx start_container implementation (sbx run) and SSH agent forwarding fix
 **UI hint**: yes
 
 ### Phase 7: User Documentation and CLI Reference Sync
@@ -136,5 +137,5 @@ Phases execute in numeric order: 1, 2, 3, 4, 5, 6, 7
 | 3. container_config Capability Gating and Workspace Path Conformance | 2/2 | Complete   | 2026-05-16 |
 | 4. Embedded sbx Kit and Materialization | 2/3 | Gap closure | 2026-05-16 |
 | 5. Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish) | 0/2 | Not started | - |
-| 6. Settings TUI, Cross-Machine Integration, and Sleep/Wake | 0/2 | Not started | - |
+| 6. Settings TUI, Cross-Machine Integration, and Sleep/Wake | 2/3 | Gap closure | - |
 | 7. User Documentation and CLI Reference Sync | 0/TBD | Not started | - |
