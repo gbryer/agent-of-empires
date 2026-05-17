@@ -36,7 +36,9 @@ fn build_children_map() -> HashMap<u32, Vec<u32>> {
         };
 
         if let Some(ppid) = parse_stat_field(&content, 3) {
-            children_map.entry(ppid as u32).or_default().push(child_pid);
+            if let Ok(ppid_u32) = u32::try_from(ppid) {
+                children_map.entry(ppid_u32).or_default().push(child_pid);
+            }
         }
     }
 
@@ -73,7 +75,10 @@ pub fn get_foreground_pid(shell_pid: u32) -> Option<u32> {
 
     // Find a process in the foreground process group
     // The tpgid is a process group ID, we need to find a process in that group
-    find_process_in_group(tpgid as u32).or(Some(shell_pid))
+    let Ok(tpgid_u32) = u32::try_from(tpgid) else {
+        return Some(shell_pid);
+    };
+    find_process_in_group(tpgid_u32).or(Some(shell_pid))
 }
 
 fn find_process_in_group(pgrp: u32) -> Option<u32> {
@@ -98,7 +103,7 @@ fn find_process_in_group(pgrp: u32) -> Option<u32> {
 
         if let Ok(content) = fs::read_to_string(&stat_path) {
             if let Some(proc_pgrp) = parse_stat_field(&content, 4) {
-                if proc_pgrp as u32 == pgrp {
+                if u32::try_from(proc_pgrp) == Ok(pgrp) {
                     return Some(pid);
                 }
             }
