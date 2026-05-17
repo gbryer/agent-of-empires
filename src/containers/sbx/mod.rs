@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 use crate::containers::container_interface::{ContainerConfig, RuntimeCapabilities};
@@ -119,11 +119,16 @@ impl SbxRuntime {
             DockerError::CommandFailed(format!("kit materialization failed: {}", e))
         })?;
 
-        let args = argv::build_create_args(name, image, Some(&kit_path), config);
+        let ssh_sock = std::env::var("SSH_AUTH_SOCK").ok();
+        let args =
+            argv::build_create_args(name, image, Some(&kit_path), config, ssh_sock.as_deref());
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         let mut cmd = Command::new(&self.binary);
         cmd.args(&arg_refs);
+        if let Some(ref sock_path) = ssh_sock {
+            cmd.env("SSH_AUTH_SOCK", sock_path);
+        }
         for entry in &config.environment {
             if let crate::containers::container_interface::EnvEntry::Inherit { key, value } = entry
             {
@@ -150,10 +155,50 @@ impl SbxRuntime {
         Ok(name.to_string())
     }
 
-    /// No-op: sbx sandboxes auto-start when the terminal attaches via
-    /// `sbx run` or when `sbx exec` is called.
-    pub fn start_container(&self, _name: &str) -> ContainerResult<()> {
-        Ok(())
+    /// Start a stopped sandbox by spawning `sbx run <name>` and polling
+    /// until status transitions to "running". The spawned child is killed
+    /// once running is confirmed (the real terminal attaches via `sbx exec`).
+    pub fn start_container(&self, name: &str) -> ContainerResult<()> {
+        tracing::info!(target: "containers.sbx", %name, "starting sandbox");
+
+        let mut child = Command::new(&self.binary)
+            .args(["run", name])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| DockerError::CommandFailed(format!("sbx run spawn failed: {}", e)))?;
+
+        let delays = [200, 400, 800, 1600, 3200, 6400, 12800];
+        for delay in &delays {
+            if self.is_container_running(name).unwrap_or(false) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(*delay));
+        }
+        // Final check after last delay
+        if self.is_container_running(name).unwrap_or(false) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(());
+        }
+
+        let _ = child.kill();
+        let output = child.wait_with_output();
+        let stderr_msg = output
+            .map(|o| String::from_utf8_lossy(&o.stderr).trim().to_string())
+            .unwrap_or_default();
+        Err(DockerError::CommandFailed(format!(
+            "sbx sandbox '{}' not running after start attempt{}",
+            name,
+            if stderr_msg.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", stderr_msg)
+            }
+        )))
     }
 
     pub fn stop_container(&self, name: &str) -> ContainerResult<()> {
@@ -426,11 +471,28 @@ mod tests {
     }
 
     #[test]
-    fn test_start_container_is_noop() {
-        let sbx = SbxRuntime {
-            binary: PathBuf::from("/nonexistent/sbx-binary"),
-        };
-        assert!(sbx.start_container("anything").is_ok());
+    fn test_start_container_calls_run() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log_file = dir.path().join("args.log");
+        // Write JSON response to a file so the mock can cat it (avoids
+        // shell quoting headaches with curly braces).
+        let json_file = dir.path().join("ls_response.json");
+        std::fs::write(
+            &json_file,
+            r#"{"sandboxes":[{"name":"my-sandbox","status":"running","id":"abc","agent":"test","socket_path":"/tmp/s","workspaces":[]}]}"#,
+        )
+        .unwrap();
+        let script = format!(
+            "#!/bin/sh\necho \"$1\" >> \"{log}\"\ncase \"$1\" in\n  run) sleep 30; exit 0;;\n  ls) cat \"{json}\"; exit 0;;\nesac\nexit 0\n",
+            log = log_file.display(),
+            json = json_file.display()
+        );
+        let path = make_mock_script(&dir, &script);
+        let sbx = SbxRuntime { binary: path };
+        let result = sbx.start_container("my-sandbox");
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+        let logged = std::fs::read_to_string(&log_file).unwrap();
+        assert!(logged.contains("run"), "expected 'run' in: {}", logged);
     }
 
     #[test]
