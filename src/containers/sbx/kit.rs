@@ -46,6 +46,15 @@ pub(crate) fn cache_dir(app_dir: &Path, agent: &str) -> PathBuf {
 }
 
 fn cache_dir_inner(app_dir: &Path, agent: &str, bytes: &[u8]) -> PathBuf {
+    assert!(
+        !agent.contains('/')
+            && !agent.contains('\\')
+            && agent != ".."
+            && agent != "."
+            && !agent.is_empty(),
+        "agent name must not contain path separators or traversal: {:?}",
+        agent
+    );
     let digest = Sha256::digest(bytes);
     let hash_hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
     let segment = format!("aoe-{}-{}", env!("CARGO_PKG_VERSION"), &hash_hex[..16]);
