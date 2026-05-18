@@ -44,7 +44,7 @@ Once configured, AoE drives sbx sandboxes with the same session lifecycle as Doc
    | Hermes | mistral | `sbx secret set -g mistral` |
    | droid | droid | `sbx secret set -g droid` |
 
-   For multi-provider agents (OpenCode, Pi, Qwen Code, Kiro), set the secret for whichever provider you use. Run `sbx secret set` without arguments to launch interactive mode, which lists all available services.
+   For multi-provider agents (OpenCode, Pi, Qwen Code, Kiro, Mistral Vibe), set the secret for whichever provider you use. Run `sbx secret set` without arguments to launch interactive mode, which lists all available services.
 
 ### Verify Installation
 
