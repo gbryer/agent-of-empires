@@ -2,43 +2,15 @@
 
 ## Overview
 
-Docker Sandboxes (sbx) provide microVM-based isolation for AI coding agents via Docker Desktop. Each sandbox runs inside its own lightweight microVM rather than sharing the host kernel, providing stronger isolation than standard Docker containers.
+AoE supports [Docker Sandboxes (sbx)](https://docs.docker.com/sandbox/) as a sandbox runtime. Each sandbox runs inside its own microVM rather than sharing the host kernel, providing stronger isolation than standard Docker containers.
 
 ## Prerequisites
 
-1. **Docker Desktop** with sbx support. The `sbx` CLI ships with Docker Desktop.
+1. **sbx installed** and available on your `PATH`. See the [sbx documentation](https://docs.docker.com/sandbox/) for installation.
 
-2. **Sign in to Docker:**
+2. **Signed in and configured.** AoE checks sbx health at startup and will tell you what to do if sbx is not ready. The two common setup steps are `sbx login` and `sbx policy set-default`.
 
-   ```bash
-   sbx login
-   ```
-
-3. **Set a default network policy:**
-
-   ```bash
-   sbx policy set-default <policy>
-   ```
-
-   | Policy | Description |
-   |--------|-------------|
-   | `allow-all` | All outbound traffic allowed. |
-   | `balanced` | Common dev traffic allowed (AI services, package registries). |
-   | `deny-all` | All outbound traffic blocked. |
-
-   `balanced` is a sensible default.
-
-4. **Store API secrets** for each agent you plan to use. The sbx proxy injects secrets at runtime; credentials never enter the microVM directly.
-
-   | Agent | Service | Command |
-   |-------|---------|---------|
-   | Claude Code | anthropic | `sbx secret set -g anthropic` |
-   | Codex | openai | `sbx secret set -g openai` |
-   | Gemini CLI | google | `sbx secret set -g google` |
-   | Hermes | mistral | `sbx secret set -g mistral` |
-   | droid | droid | `sbx secret set -g droid` |
-
-   For multi-provider agents (OpenCode, Pi, Qwen Code, Kiro, Mistral Vibe), set the secret for whichever provider you use. Run `sbx secret set` without arguments for interactive mode.
+3. **API secrets stored** for the agents you use. sbx injects secrets via its proxy; run `sbx secret set` for interactive setup, or `sbx secret set -g <service>` for a specific service (e.g., `sbx secret set -g anthropic` for Claude Code).
 
 ### Verify Installation
 
@@ -48,6 +20,8 @@ sbx ls
 ```
 
 ## Configuration
+
+Update your config file to use sbx as the sandbox runtime.
 
 **Linux:** `~/.config/agent-of-empires/config.toml`
 **macOS:** `~/.agent-of-empires/config.toml`
@@ -77,57 +51,37 @@ aoe add --sandbox .
 aoe add --sandbox --sandbox-image my-custom-image:latest .
 ```
 
-## Important Notes
+## Compatibility Notes
 
-### Disk Usage
+sbx sandboxes are microVMs, not containers. A few things work differently from Docker:
 
-Each sandbox is a full microVM with its own filesystem. Expect roughly ImageSize x ActiveSessions of host disk. Stopped sandboxes still consume disk; remove them with `aoe remove`.
+- **No read-only mounts.** The `:ro` volume flag is not supported.
+- **No anonymous volumes.** The `volume_ignores` setting has no effect.
+- **SSH agent forwarding** uses the sbx proxy (`SSH_AUTH_SOCK`), not volume-mounted keys. The `mount_ssh` setting has no effect; SSH works automatically if you have `sbx secret set` configured for GitHub.
+- **Convenience mounts dropped.** Mounts whose host and container paths differ (like `.gitconfig`) are silently dropped. AoE logs a warning when this happens.
+- **Port publishing** happens after sandbox creation, not at create time. AoE handles this automatically; failures surface as warnings.
+- **Disk usage.** Each sandbox has its own filesystem. Stopped sandboxes still consume disk; remove them with `aoe remove`.
 
-### Kit Format (Experimental)
-
-AoE ships an embedded sbx kit that configures each sandbox. The kit format is experimental per Docker; schema changes in future Docker Desktop updates may require an AoE update.
-
-### Upgrade Path
-
-sbx updates via Docker Desktop. Update Docker Desktop through its normal mechanism.
-
-> **Warning:** Do NOT run `sbx reset` to troubleshoot. This destroys all sandboxes, cached data, and stored secrets.
-
-### Volume Mount Limitations
-
-sbx does not support read-only (`:ro`) volume mounts or anonymous volumes. The `volume_ignores` setting has no effect. Convenience mounts whose host and container paths differ (like `.gitconfig`) are silently dropped; AoE logs a warning when this happens.
-
-### SSH Agent Forwarding
-
-SSH access inside sbx sandboxes uses agent forwarding via the sbx proxy (`SSH_AUTH_SOCK`), not volume-mounted keys. The `mount_ssh` config option has no effect for sbx; the SSH mount is dropped because sbx cannot map arbitrary host paths into the microVM.
-
-### Port Publishing
-
-Ports are published after sandbox creation, not at create time. AoE handles this automatically; failures surface as warnings without rolling back the sandbox.
+> **Warning:** Do NOT run `sbx reset` to troubleshoot. It destroys all sandboxes, cached data, and stored secrets.
 
 ## Troubleshooting
 
-### "Not logged in"
+### AoE reports sbx as unavailable
 
-Run `sbx login` to re-authenticate.
+AoE runs `sbx version` and `sbx ls` to check health. Common issues:
 
-### "Policy not configured"
+- **"Not logged in"**: run `sbx login`.
+- **"Policy not configured"**: run `sbx policy set-default balanced`.
 
-```bash
-sbx policy set-default balanced
-```
+### Sandbox creation fails after sbx update
 
-### Sandbox creation fails after Docker Desktop update
-
-The kit format may have changed. Check for an AoE update.
+The sbx kit format is experimental; schema changes may require an AoE update.
 
 ### Debug Logging
 
 ```bash
 AGENT_OF_EMPIRES_DEBUG=1 aoe add --sandbox .
 ```
-
-Log location:
 
 - **Linux:** `~/.config/agent-of-empires/debug.log`
 - **macOS:** `~/.agent-of-empires/debug.log`
