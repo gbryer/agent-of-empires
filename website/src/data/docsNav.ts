@@ -21,6 +21,7 @@ export const docsNav: NavSection[] = [
     title: "Guides",
     items: [
       { title: "Docker Sandbox", href: "/guides/sandbox/" },
+      { title: "Docker Sandboxes (sbx)", href: "/guides/sbx/" },
       { title: "Web Dashboard", href: "/guides/web-dashboard/" },
       { title: "Cockpit (Native Agent Rendering)", href: "/docs/cockpit/" },
       { title: "Remote Phone Access", href: "/guides/remote-phone-access/" },
