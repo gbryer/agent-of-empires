@@ -1007,6 +1007,18 @@ pub(crate) fn sbx_agent_config_copies(tool: &str) -> Vec<SbxConfigCopy> {
                 continue;
             }
 
+            // Hermes config.yaml and allowlist contain Docker-style hooks; rebuild below
+            if tool == "hermes"
+                && (fname_str == "config.yaml" || fname_str == "shell-hooks-allowlist.json")
+            {
+                continue;
+            }
+
+            // Kiro agents/ subdir contains aoe-hooks.json with Docker-style hooks; rebuild below
+            if tool == "kiro" && fname_str == "agents" {
+                continue;
+            }
+
             let dest = if is_home_seed {
                 format!("{}/", CONTAINER_HOME)
             } else {
@@ -1026,6 +1038,33 @@ pub(crate) fn sbx_agent_config_copies(tool: &str) -> Vec<SbxConfigCopy> {
             copies.push(SbxConfigCopy {
                 host_path: merged_path,
                 container_path: format!("{}/settings.json", container_config_dir),
+            });
+        }
+
+        if tool == "hermes" {
+            if let Some(merged_path) = build_sbx_merged_hermes_config(&staging_dir) {
+                copies.push(SbxConfigCopy {
+                    host_path: merged_path,
+                    container_path: format!("{}/config.yaml", container_config_dir),
+                });
+                let allowlist_path = staging_dir.join(".aoe-sbx-allowlist.json");
+                if allowlist_path.exists() {
+                    copies.push(SbxConfigCopy {
+                        host_path: allowlist_path,
+                        container_path: format!(
+                            "{}/shell-hooks-allowlist.json",
+                            container_config_dir
+                        ),
+                    });
+                }
+            }
+        }
+
+        if tool == "kiro" {
+            let kiro_agent_path = build_sbx_kiro_agent_config(&staging_dir);
+            copies.push(SbxConfigCopy {
+                host_path: kiro_agent_path,
+                container_path: format!("{}/agents/aoe-hooks.json", container_config_dir),
             });
         }
     }
@@ -1064,6 +1103,76 @@ fn build_sbx_merged_settings(staging_dir: &Path, tool: &str) -> Option<PathBuf> 
     let merged_content = serde_json::to_string_pretty(&settings).ok()?;
     std::fs::write(&merged_path, &merged_content).ok()?;
     Some(merged_path)
+}
+
+/// Build a merged Hermes config.yaml: user config from the staging dir with
+/// hooks replaced by sbx-specific hooks. Returns the path to a temp file, or
+/// None if no config.yaml exists in the staging dir. Also writes a matching
+/// shell-hooks-allowlist.json so Hermes accepts the hooks without prompting.
+fn build_sbx_merged_hermes_config(staging_dir: &Path) -> Option<PathBuf> {
+    let config_path = staging_dir.join("config.yaml");
+    let content = std::fs::read_to_string(&config_path).ok()?;
+    let mut config: serde_yaml::Value = serde_yaml::from_str(&content)
+        .unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+
+    let sbx_hooks: serde_yaml::Value =
+        serde_yaml::from_str(crate::containers::sbx::kit::SETTINGS_HERMES)
+            .unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+
+    if let (Some(root), Some(sbx_root)) = (config.as_mapping_mut(), sbx_hooks.as_mapping()) {
+        let hooks_key = serde_yaml::Value::String("hooks".to_string());
+        if let Some(sbx_hooks_value) = sbx_root.get(&hooks_key) {
+            root.insert(hooks_key, sbx_hooks_value.clone());
+        }
+    }
+
+    let merged_path = staging_dir.join(".aoe-sbx-config.yaml");
+    let merged_content = serde_yaml::to_string(&config).ok()?;
+    std::fs::write(&merged_path, &merged_content).ok()?;
+
+    // Build allowlist that pre-approves the sbx hook commands
+    if let Some(hooks_map) = sbx_hooks
+        .as_mapping()
+        .and_then(|m| m.get(serde_yaml::Value::String("hooks".into())))
+        .and_then(|v| v.as_mapping())
+    {
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut approvals = Vec::new();
+        for (event_key, entries) in hooks_map {
+            let event = event_key.as_str().unwrap_or_default();
+            if let Some(seq) = entries.as_sequence() {
+                for entry in seq {
+                    if let Some(cmd) = entry
+                        .as_mapping()
+                        .and_then(|m| m.get(serde_yaml::Value::String("command".into())))
+                        .and_then(|v| v.as_str())
+                    {
+                        approvals.push(serde_json::json!({
+                            "event": event,
+                            "command": cmd,
+                            "approved_at": now,
+                            "script_mtime_at_approval": null,
+                        }));
+                    }
+                }
+            }
+        }
+        let allowlist = serde_json::json!({ "approvals": approvals });
+        let allowlist_path = staging_dir.join(".aoe-sbx-allowlist.json");
+        if let Ok(content) = serde_json::to_string_pretty(&allowlist) {
+            let _ = std::fs::write(&allowlist_path, content);
+        }
+    }
+
+    Some(merged_path)
+}
+
+/// Build an sbx-specific Kiro agent config with sbx hook paths.
+/// Always writes the file (Kiro agent config is AoE-managed, not user-edited).
+fn build_sbx_kiro_agent_config(staging_dir: &Path) -> PathBuf {
+    let merged_path = staging_dir.join(".aoe-sbx-kiro-hooks.json");
+    let _ = std::fs::write(&merged_path, crate::containers::sbx::kit::SETTINGS_KIRO);
+    merged_path
 }
 
 /// Build a full `ContainerConfig` for creating a sandboxed container.
@@ -4307,6 +4416,84 @@ volume_ignores = [".venv", "node_modules"]
         assert!(
             merged.get("hooks").is_none(),
             "hooks should be removed for unknown agent"
+        );
+    }
+
+    #[test]
+    fn test_build_sbx_merged_hermes_config_replaces_hooks() {
+        let dir = TempDir::new().unwrap();
+        let config =
+            "hooks:\n  pre_llm_call:\n    - command: \"old-docker-hook\"\nsome_setting: true\n";
+        fs::write(dir.path().join("config.yaml"), config).unwrap();
+
+        let merged_path = build_sbx_merged_hermes_config(dir.path()).unwrap();
+        let merged_content = fs::read_to_string(&merged_path).unwrap();
+        let merged: serde_yaml::Value = serde_yaml::from_str(&merged_content).unwrap();
+
+        assert!(
+            !merged_content.contains("old-docker-hook"),
+            "Docker-style hook should be replaced"
+        );
+        assert!(
+            merged_content.contains(".aoe-hooks"),
+            "sbx-style hook path missing"
+        );
+        let hooks = merged.get("hooks").expect("hooks key missing");
+        assert!(
+            hooks.get("pre_llm_call").is_some(),
+            "pre_llm_call event missing"
+        );
+        assert!(
+            hooks.get("on_session_end").is_some(),
+            "on_session_end event missing"
+        );
+        assert_eq!(
+            merged.get("some_setting").and_then(|v| v.as_bool()),
+            Some(true),
+            "user settings should be preserved"
+        );
+
+        let allowlist_path = dir.path().join(".aoe-sbx-allowlist.json");
+        assert!(allowlist_path.exists(), "allowlist not written");
+        let allowlist: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&allowlist_path).unwrap()).unwrap();
+        let approvals = allowlist["approvals"].as_array().unwrap();
+        assert!(
+            !approvals.is_empty(),
+            "allowlist should have approval entries"
+        );
+    }
+
+    #[test]
+    fn test_build_sbx_merged_hermes_config_returns_none_when_no_config() {
+        let dir = TempDir::new().unwrap();
+        assert!(
+            build_sbx_merged_hermes_config(dir.path()).is_none(),
+            "should return None when config.yaml doesn't exist"
+        );
+    }
+
+    #[test]
+    fn test_build_sbx_kiro_agent_config_writes_hooks() {
+        let dir = TempDir::new().unwrap();
+        let path = build_sbx_kiro_agent_config(dir.path());
+        assert!(path.exists(), "kiro agent config not written");
+
+        let content = fs::read_to_string(&path).unwrap();
+        let config: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert_eq!(config["name"], "aoe-hooks");
+        assert!(config["tools"].as_array().is_some());
+        let hooks = config.get("hooks").expect("hooks key missing");
+        assert!(hooks.get("preToolUse").is_some(), "preToolUse missing");
+        assert!(
+            hooks.get("userPromptSubmit").is_some(),
+            "userPromptSubmit missing"
+        );
+        assert!(hooks.get("stop").is_some(), "stop missing");
+        assert!(
+            content.contains(".aoe-hooks"),
+            "sbx-style hook path missing"
         );
     }
 }

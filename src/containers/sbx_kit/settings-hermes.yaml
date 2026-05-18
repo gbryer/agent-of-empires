@@ -1,0 +1,13 @@
+hooks:
+  pre_llm_call:
+    - command: "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"
+  pre_tool_call:
+    - command: "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"
+  post_llm_call:
+    - command: "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s idle > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"
+  pre_approval_request:
+    - command: "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s waiting > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"
+  post_approval_response:
+    - command: "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s running > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"
+  on_session_end:
+    - command: "sh -c '[ -n \"$AOE_INSTANCE_ID\" ] || exit 0; mkdir -p \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID\" && printf %s idle > \"${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID/status\"'"

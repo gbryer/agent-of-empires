@@ -23,6 +23,8 @@ pub(crate) const SETTINGS_CLAUDE: &str = include_str!("../sbx_kit/settings-claud
 pub(crate) const SETTINGS_GEMINI: &str = include_str!("../sbx_kit/settings-gemini.json");
 pub(crate) const SETTINGS_CURSOR: &str = include_str!("../sbx_kit/settings-cursor.json");
 pub(crate) const SETTINGS_QWEN: &str = include_str!("../sbx_kit/settings-qwen.json");
+pub(crate) const SETTINGS_HERMES: &str = include_str!("../sbx_kit/settings-hermes.yaml");
+pub(crate) const SETTINGS_KIRO: &str = include_str!("../sbx_kit/settings-kiro.json");
 
 /// Agents whose `install_hint` cannot be applied headlessly inside an sbx
 /// microVM (Cursor and Copilot are doc-only pointers; settl is a Homebrew
@@ -357,6 +359,75 @@ mod tests {
         assert!(
             SPEC_YAML.contains("${WORKDIR}/.aoe-hooks/$AOE_INSTANCE_ID"),
             "spec.yaml install command missing WORKDIR-rooted hook shim"
+        );
+    }
+
+    #[test]
+    fn spec_yaml_install_covers_hermes_and_kiro() {
+        assert!(
+            SPEC_YAML.contains("hermes_hooks"),
+            "spec.yaml install command missing hermes hook installer"
+        );
+        assert!(
+            SPEC_YAML.contains(".hermes"),
+            "spec.yaml install command missing .hermes config dir"
+        );
+        assert!(
+            SPEC_YAML.contains("pre_llm_call"),
+            "spec.yaml install command missing hermes pre_llm_call event"
+        );
+        assert!(
+            SPEC_YAML.contains("kiro_hooks"),
+            "spec.yaml install command missing kiro hook installer"
+        );
+        assert!(
+            SPEC_YAML.contains(".kiro"),
+            "spec.yaml install command missing .kiro config dir"
+        );
+        assert!(
+            SPEC_YAML.contains("aoe-hooks.json"),
+            "spec.yaml install command missing kiro aoe-hooks.json agent file"
+        );
+    }
+
+    #[test]
+    fn settings_hermes_contains_all_hook_events() {
+        for event in &[
+            "pre_llm_call",
+            "pre_tool_call",
+            "post_llm_call",
+            "pre_approval_request",
+            "post_approval_response",
+            "on_session_end",
+        ] {
+            assert!(
+                SETTINGS_HERMES.contains(event),
+                "settings-hermes.yaml missing event {}",
+                event
+            );
+        }
+        assert!(
+            SETTINGS_HERMES.contains(".aoe-hooks"),
+            "settings-hermes.yaml missing sbx-style hook path"
+        );
+    }
+
+    #[test]
+    fn settings_kiro_contains_all_hook_events() {
+        for event in &["preToolUse", "userPromptSubmit", "stop"] {
+            assert!(
+                SETTINGS_KIRO.contains(event),
+                "settings-kiro.json missing event {}",
+                event
+            );
+        }
+        assert!(
+            SETTINGS_KIRO.contains("aoe-hooks"),
+            "settings-kiro.json missing agent name"
+        );
+        assert!(
+            SETTINGS_KIRO.contains(".aoe-hooks"),
+            "settings-kiro.json missing sbx-style hook path"
         );
     }
 
