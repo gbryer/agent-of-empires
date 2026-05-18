@@ -41,6 +41,13 @@ const PAGES = [
       "Run AI coding agents in isolated Docker containers with Agent of Empires.",
   },
   {
+    source: "docs/guides/sbx.md",
+    dest: "guides/sbx.md",
+    title: "Docker Sandboxes (sbx)",
+    description:
+      "Set up Docker Sandboxes (sbx) as a microVM-based sandbox runtime for Agent of Empires.",
+  },
+  {
     source: "docs/guides/tmux-status-bar.md",
     dest: "guides/tmux-status-bar.md",
     title: "tmux Status Bar",
@@ -187,6 +194,7 @@ const URL_MAP = {
   "docs/guides/diff-view.md": "/guides/diff-view/",
   "docs/guides/repo-config.md": "/guides/repo-config/",
   "docs/guides/sandbox.md": "/guides/sandbox/",
+  "docs/guides/sbx.md": "/guides/sbx/",
   "docs/guides/tmux-status-bar.md": "/guides/tmux-status-bar/",
   "docs/guides/web-dashboard.md": "/guides/web-dashboard/",
   "docs/guides/remote-phone-access.md": "/guides/remote-phone-access/",

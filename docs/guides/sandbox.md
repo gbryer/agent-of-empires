@@ -7,6 +7,8 @@ Docker sandboxing runs your AI coding agents (Claude Code, OpenCode, Mistral Vib
 > **Linux users:** AoE also supports [Podman](podman.md) as a daemonless, rootless-friendly alternative to Docker.
 >
 > **macOS users:** AoE also supports [Apple Containers](apple-containers.md) as a native alternative to Docker Desktop.
+>
+> **Looking for microVM-grade isolation?** AoE also supports [Docker Sandboxes (sbx)](sbx.md) for microVM-based sandboxing via Docker Desktop.
 
 **Key Features:**
 - One container per session
