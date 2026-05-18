@@ -18,7 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 4: Embedded sbx Kit and Materialization** - Author `src/containers/sbx_kit/` (`spec.yaml`, `install.sh`, status-hook shims), embed via stdlib `include_str!`/`include_bytes!`, materialize to a content-hashed cache dir on first use, and CI-validate the spec (completed 2026-05-16; gap closure in progress)
 - [ ] **Phase 5: Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish)** - Wire real `sbx` subprocess calls into `create_container` (with readiness probe + first-exec retry), `exec_command`, `stop_container`, `remove`, batch state via `sbx ls --json`, and the post-create `sbx ports --publish` per-port loop
 - [ ] **Phase 6: Settings TUI, Cross-Machine Integration, and Sleep/Wake** - Wire `Sbx` through the settings TUI per AGENTS.md (FieldKey + apply/clear + override merge), gate field visibility on capabilities, verify cockpit/web/cross-machine transparency end-to-end, and scaffold the post-wake clock-resync handler in `src/process/`
-- [ ] **Phase 7: User Documentation and CLI Reference Sync** - Ship `docs/sandbox/sbx.md` covering host-side prerequisites (`sbx login`, `sbx policy set-default`, `sbx secret set -g`), upgrade path, kit-format-experimental warning, and disk-usage note; regenerate `docs/cli/reference.md` via `cargo xtask gen-docs`
+- [ ] **Phase 7: User Documentation and CLI Reference Sync** - Ship `docs/guides/sbx.md` covering host-side prerequisites (`sbx login`, `sbx policy set-default`, `sbx secret set -g`), upgrade path, kit-format-experimental warning, and disk-usage note; regenerate `docs/cli/reference.md` via `cargo xtask gen-docs`
 
 ## Phase Details
 
@@ -112,18 +112,22 @@ Plans:
 Plans:
 - [x] 06-01-PLAN.md — Capability-driven field visibility filter in build_sandbox_fields + cross-product test + e2e sbx runtime selector + web session integration test
 - [x] 06-02-PLAN.md — Sleep/wake handler (IOKit on macOS, D-Bus/busctl on Linux) with resync_sbx_clocks logic and unit tests
-- [ ] 06-03-PLAN.md — Gap closure: sbx start_container implementation (sbx run) and SSH agent forwarding fix
+- [x] 06-03-PLAN.md — Gap closure: sbx start_container implementation (sbx run) and SSH agent forwarding fix
 **UI hint**: yes
 
 ### Phase 7: User Documentation and CLI Reference Sync
-**Goal**: A user-facing guide at `docs/sandbox/sbx.md` (or equivalent path consistent with the existing `docs/` structure) explains every host-side prerequisite aoe does NOT manage: `sbx login`, `sbx policy set-default <allow-all|balanced|deny-all>`, and `sbx secret set -g <service>` per agent. The doc covers the upgrade path (do NOT recommend `sbx reset`), kit-format-experimental warning, disk-usage warning ("each sbx sandbox is a full microVM with its own image cache; expect ~Image Size x Active Sessions of host disk usage"), and debug-log location. `cargo xtask gen-docs` regenerates `docs/cli/reference.md` to reflect any new clap help (e.g., new `aoe sandbox runtime` choices) and CI enforces the regeneration.
+**Goal**: A user-facing guide at `docs/guides/sbx.md` explains every host-side prerequisite aoe does NOT manage: `sbx login`, `sbx policy set-default <allow-all|balanced|deny-all>`, and `sbx secret set -g <service>` per agent. The doc covers the upgrade path (do NOT recommend `sbx reset`), kit-format-experimental warning, disk-usage warning ("each sbx sandbox is a full microVM with its own image cache; expect ~Image Size x Active Sessions of host disk usage"), and debug-log location. `cargo xtask gen-docs` regenerates `docs/cli/reference.md` to reflect any new clap help (e.g., new `aoe sandbox runtime` choices) and CI enforces the regeneration.
 **Depends on**: Phase 5, Phase 6
 **Requirements**: DOC-01, DOC-02
 **Success Criteria** (what must be TRUE):
-  1. `docs/sandbox/sbx.md` (or chosen path) exists and includes sections for: `sbx login` setup, default network policy choice with a per-agent provider-domain table, `sbx secret set -g` per agent (Claude maps to `anthropic`, Codex maps to `openai`, etc.), upgrade path that explicitly avoids `sbx reset`, disk-usage warning, debug-log location, and kit-format-experimental warning
+  1. `docs/guides/sbx.md` exists and includes sections for: `sbx login` setup, default network policy choice with a per-agent provider-domain table, `sbx secret set -g` per agent (Claude maps to `anthropic`, Codex maps to `openai`, etc.), upgrade path that explicitly avoids `sbx reset`, disk-usage warning, debug-log location, and kit-format-experimental warning
   2. The doc is wired into the website per the AGENTS.md "Adding a new page to the website" recipe: entry in `website/scripts/sync-docs.mjs` `PAGES` and `URL_MAP`, nav entry in `website/src/data/docsNav.ts`
   3. `cargo xtask gen-docs` produces no diff in `docs/cli/reference.md` when run after merging Phase 6 (clap help reflects the new `Sbx` runtime choice); CI's docs job passes
   4. A first-time sbx user following only the new doc can go from "fresh aoe install" to "`Sbx` selected and a session running" without consulting source code
+**Plans**: 2 plans
+Plans:
+- [x] 07-01-PLAN.md — Author docs/guides/sbx.md: user-facing sbx runtime guide with prerequisites, configuration, usage, important notes, and troubleshooting
+- [x] 07-02-PLAN.md — Wire sbx guide into website (sync-docs.mjs, docsNav.ts), add sandbox.md callout, regenerate CLI reference via cargo xtask gen-docs
 
 ## Progress
 
@@ -138,4 +142,4 @@ Phases execute in numeric order: 1, 2, 3, 4, 5, 6, 7
 | 4. Embedded sbx Kit and Materialization | 2/3 | Gap closure | 2026-05-16 |
 | 5. Full SbxRuntime Integration (Subprocess, Lifecycle, Port Publish) | 0/2 | Not started | - |
 | 6. Settings TUI, Cross-Machine Integration, and Sleep/Wake | 2/3 | Gap closure | - |
-| 7. User Documentation and CLI Reference Sync | 0/TBD | Not started | - |
+| 7. User Documentation and CLI Reference Sync | 0/2 | Planned | - |

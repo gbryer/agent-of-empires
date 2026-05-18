@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 5 context gathered
-last_updated: "2026-05-16T10:02:12.985Z"
-last_activity: 2026-05-16
+status: executing
+stopped_at: Phase 7 context gathered
+last_updated: "2026-05-18T04:07:42.714Z"
+last_activity: 2026-05-18
 progress:
   total_phases: 7
-  completed_phases: 4
-  total_plans: 9
-  completed_plans: 9
+  completed_phases: 7
+  total_plans: 16
+  completed_plans: 16
   percent: 100
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-15)
 
 **Core value:** Picking `sbx` from the container runtime setting must be a true drop-in: every aoe flow that works on Docker today (TUI, web dashboard, cockpit, cross-machine, multi-agent) keeps working transparently on sbx, with sbx-specific quirks (out-of-band port publishing, microVM lifecycle) absorbed inside the runtime layer rather than leaked to the user.
-**Current focus:** Phase 04 — embedded-sbx-kit-and-materialization
+**Current focus:** Phase 07 — user-documentation-and-cli-reference-sync
 
 ## Current Position
 
-Phase: 5
+Phase: 07
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-05-16
+Status: Executing Phase 07
+Last activity: 2026-05-18
 
 Progress: [██████████] 100%
 
@@ -36,7 +36,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 7
+- Total plans completed: 14
 - Average duration: n/a
 - Total execution time: 0.0 hours
 
@@ -46,6 +46,8 @@ Progress: [██████████] 100%
 |-------|-------|-------|----------|
 | 03 | 2 | - | - |
 | 04 | 3 | - | - |
+| 06 | 3 | - | - |
+| 07 | 2 | - | - |
 
 **Recent Trend:**
 
@@ -89,6 +91,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-16T10:02:12.979Z
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-full-sbxruntime-integration-subprocess-lifecycle-port-publis/05-CONTEXT.md
+Last session: 2026-05-18T03:20:50.901Z
+Stopped at: Phase 7 context gathered
+Resume file: .planning/phases/07-user-documentation-and-cli-reference-sync/07-CONTEXT.md

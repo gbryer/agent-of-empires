@@ -1,9 +1,14 @@
 ---
 phase: 06-settings-tui-cross-machine-integration-and-sleep-wake
-reviewed: 2026-05-16T12:00:00Z
+reviewed: 2026-05-17T14:30:00Z
 depth: standard
-files_reviewed: 6
+files_reviewed: 11
 files_reviewed_list:
+  - src/containers/runtime.rs
+  - src/containers/sbx_kit/spec.yaml
+  - src/containers/sbx/argv.rs
+  - src/containers/sbx/kit.rs
+  - src/containers/sbx/mod.rs
   - src/process/linux.rs
   - src/process/macos.rs
   - src/process/mod.rs
@@ -11,138 +16,99 @@ files_reviewed_list:
   - tests/e2e/sandbox.rs
   - tests/web_session_create.rs
 findings:
-  critical: 2
-  warning: 4
-  info: 2
-  total: 8
-status: fixed
+  critical: 1
+  warning: 3
+  info: 1
+  total: 5
+status: issues_found
 ---
 
 # Phase 6: Code Review Report
 
-**Reviewed:** 2026-05-16T12:00:00Z
+**Reviewed:** 2026-05-17T14:30:00Z
 **Depth:** standard
-**Files Reviewed:** 6
+**Files Reviewed:** 11
 **Status:** issues_found
 
 ## Summary
 
-Reviewed the process management modules (linux, macos, mod), TUI settings field definitions, and two test files. The main concerns are: (1) a potential panic in the Linux `/proc/*/stat` parser when the stat content is truncated or malformed, (2) an overly broad string match in the Linux wake handler that can trigger spurious clock resyncs, (3) early-return-on-error semantics in a loop that silently aborts the entire search, and (4) an unchecked null pointer in the macOS IOKit FFI path.
+Reviewed the sbx runtime integration (container lifecycle, argv builders, kit materializer, port publishing), OS-specific process management (Linux D-Bus wake handler, macOS IOKit wake handler, clock resync), TUI settings field gating by runtime capabilities, and two test files. The implementation is generally solid with good test coverage and correct dispatch routing. Key concerns: a path input used in filesystem operations without sanitization (mitigated but fragile), incorrect fallback logic for agent name parsing in container creation, and a platform portability issue in test code.
 
 ## Critical Issues
 
-### CR-01: Potential panic in `parse_stat_field` on truncated `/proc/*/stat` content
+### CR-01: Unsanitized `agent` parameter in `cache_dir` path construction
 
-**File:** `src/process/linux.rs:117`
-**Issue:** The expression `&content[close_paren + 2..]` can panic with an out-of-bounds index if the content string ends at or immediately after the closing parenthesis. For example, if `/proc/<pid>/stat` contains `"1 (x)"` (5 bytes), `rfind(')')` returns `Some(4)`, and `4 + 2 = 6 > 5`, causing a panic. While a fully-formed `/proc/pid/stat` line always has fields after the comm field, the file is read from `/proc` which races with process lifecycle; a process exiting mid-read or a malformed entry can produce truncated content. This function is called in hot paths including `build_children_map`, `get_foreground_pid`, and `find_process_in_group`.
+**File:** `src/containers/sbx/kit.rs:52`
+**Issue:** The `cache_dir` and `cache_dir_inner` functions use `.join(agent)` directly with an arbitrary `&str` input. On Unix, if `agent` contains `/` or `..` components (e.g., `../../etc/malicious`), `PathBuf::join` would resolve the traversal. The `pub(crate)` function `cache_dir` is exposed within the crate. While the `ensure_with_app_dir` function currently bails before writing files for unrecognized agents (because `install_hint()` returns `None` and `UNSUPPORTED_AGENTS` rejects them), the `cache_dir` function itself is called from the test at line 316 with arbitrary agent names and could be called from new code paths in the future without the protective gate. Additionally, `ensure_with_app_dir` still calls `target.exists()` at line 64 with the unsanitized path before the `install_hint` check, performing a filesystem probe at an attacker-controlled location.
+
 **Fix:**
 ```rust
-fn parse_stat_field(content: &str, field_idx: usize) -> Option<i64> {
-    let close_paren = content.rfind(')')?;
-    // Ensure there are at least 2 more bytes (") " separator) after the closing paren
-    if close_paren + 2 > content.len() {
-        return None;
-    }
-    let after_comm = &content[close_paren + 2..];
-
-    let adjusted_idx = field_idx.checked_sub(2)?;
-    let fields: Vec<&str> = after_comm.split_whitespace().collect();
-    fields.get(adjusted_idx)?.parse().ok()
+fn cache_dir_inner(app_dir: &Path, agent: &str, bytes: &[u8]) -> PathBuf {
+    // Reject agent names containing path separators or traversal components
+    assert!(
+        !agent.contains('/') && !agent.contains('\\') && agent != ".." && agent != ".",
+        "agent name must not contain path separators or traversal: {:?}",
+        agent
+    );
+    let digest = Sha256::digest(bytes);
+    let hash_hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
+    let segment = format!("aoe-{}-{}", env!("CARGO_PKG_VERSION"), &hash_hex[..16]);
+    app_dir.join("sbx-kit").join(segment).join(agent)
 }
 ```
-
-### CR-02: Overly broad "false" string match in Linux wake handler triggers spurious resyncs
-
-**File:** `src/process/linux.rs:169`
-**Issue:** The check `line.contains("false")` matches any line from `busctl monitor` output that contains the substring "false" anywhere, not just the `PrepareForSleep` signal's boolean argument. The `busctl monitor` output is multi-line structured text with metadata fields, type annotations, and property values. A line like `BOOLEAN false` is emitted for the signal argument, but the monitor could also emit lines containing "false" from other signals on the same bus match or from metadata text (e.g., if a process name or path contained "false"). Each spurious match triggers `resync_sbx_clocks`, which executes `sbx ls --json` and potentially `sbx exec <name> date` on every sandbox, causing unnecessary subprocess spawns.
-**Fix:**
-```rust
-// Match the actual busctl monitor output format for the boolean argument
-if line.trim() == "BOOLEAN false"
-    || line.contains("PrepareForSleep(false)")
-{
-    tracing::info!(target: "process.wake", "host woke from sleep; resyncing sbx clocks");
-    super::resync_sbx_clocks();
-}
-```
-Alternatively, use `busctl --json monitor` if available and parse the structured JSON output.
 
 ## Warnings
 
-### WR-01: `find_process_in_group` uses `?` inside loop, causing silent early return on transient errors
+### WR-01: Agent name fallback parsing will never produce a valid agent name
 
-**File:** `src/process/linux.rs:87,96`
-**Issue:** Lines 87 and 96 use the `?` operator on `Option` values inside a `for` loop. On line 87, `entry.ok()?` returns `None` from the entire function if a single directory entry fails to read (e.g., a `/proc/<pid>` disappears between readdir and stat). On line 96, `name_str.parse().ok()?` has the same problem, though in practice the all-digits check on line 92 makes this less likely. The effect is that a single transient `/proc` error aborts the search, returning `None` as if no process in the group was found, even when the target process still exists later in the iteration.
-**Fix:**
+**File:** `src/containers/runtime.rs:248-250`
+**Issue:** The fallback logic attempts to extract the agent name from the container name by stripping `aoe-sandbox-` and taking the first `-`-delimited segment. However, the actual container naming convention (from `src/containers/mod.rs:80`) is `format!("aoe-sandbox-{}", truncate_id(session_id, 8))` where `session_id` is a UUID fragment, not an agent name. The `split('-').next()` call will return a UUID prefix (e.g., `"a1b2c3d4"`), which will never match a valid agent name, causing `kit::ensure` to fail with "no install_hint". The `.unwrap_or("claude")` default means only Claude sessions will work when `config.agent_name` is None.
+
+**Fix:** Either always require `config.agent_name` to be populated by the caller (make it non-optional when `kind == Sbx`), or fix the fallback to resolve the agent name from session storage rather than parsing the container name:
 ```rust
-for entry in fs::read_dir(proc_dir).ok()? {
-    let Ok(entry) = entry else { continue };
-    let name = entry.file_name();
-    let name_str = name.to_string_lossy();
-
-    if !name_str.chars().all(|c| c.is_ascii_digit()) {
-        continue;
-    }
-
-    let Ok(pid) = name_str.parse::<u32>() else { continue };
-    // ... rest of loop body
+let agent_name = config.agent_name.as_deref().unwrap_or("claude");
 ```
+This explicit "claude" default is more honest than the parsing that pretends to extract a name but always fails to.
 
-### WR-02: macOS IOKit FFI does not check for null return from `IONotificationPortGetRunLoopSource`
+### WR-02: Test module uses Unix-only imports without platform gate
 
-**File:** `src/process/macos.rs:180`
-**Issue:** `IONotificationPortGetRunLoopSource(notify_port)` can return a null `CFRunLoopSourceRef` if the notification port is invalid or if there is an internal error. The code passes the result directly to `CFRunLoopAddSource` without a null check. Passing a null source to `CFRunLoopAddSource` is undefined behavior (it will typically crash with `EXC_BAD_ACCESS`).
-**Fix:**
+**File:** `src/containers/sbx/mod.rs:367-368`
+**Issue:** The `#[cfg(test)] mod tests` block at line 363 imports `std::os::unix::fs::PermissionsExt` unconditionally. This causes a compile failure when running `cargo test` on Windows. While the project primarily targets macOS and Linux, the tests in `sbx/argv.rs` and `sbx/kit.rs` (which test pure logic) could run on any platform.
+
+**Fix:** Gate the test module that requires Unix APIs:
 ```rust
-unsafe {
-    let source = IONotificationPortGetRunLoopSource(notify_port);
-    if source.is_null() {
-        tracing::warn!(
-            target: "process.wake",
-            "IONotificationPortGetRunLoopSource returned null"
-        );
-        return;
-    }
-    let run_loop = CFRunLoopGetCurrent();
-    CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
-    CFRunLoopRun();
+#[cfg(test)]
+#[cfg(unix)]
+mod tests {
+    // ...existing test code...
 }
 ```
 
-### WR-03: Linux wake handler spawns orphan `busctl` child process with no cleanup on exit
+### WR-03: Unchecked `i64 as u32` cast for PID values from `/proc/*/stat`
 
-**File:** `src/process/linux.rs:134-174`
-**Issue:** The `register_wake_handler` function spawns a `busctl monitor` subprocess and reads its stdout in a background thread, but the `child` handle is never stored or cleaned up. When the main application exits, the `busctl` process becomes orphaned (its parent changes to PID 1). While orphaned processes are cleaned up by init, this is unclean: the process keeps running and holding a D-Bus monitor connection until it is killed or the system reboots. Additionally, if the main process is killed with SIGKILL, the orphaned `busctl` process persists indefinitely.
-**Fix:** Store the `Child` handle in a module-level `OnceLock<std::process::Child>` or similar, and kill it in an `atexit` handler or `Drop` guard. Alternatively, set the child to be in the same process group and ensure it is killed on parent exit.
+**File:** `src/process/linux.rs:39`
+**Issue:** `parse_stat_field` returns `Option<i64>`, and the result is cast to `u32` with `ppid as u32` at line 39, `tpgid as u32` at line 76, and `proc_pgrp as u32` at line 101. While real PIDs on Linux are always positive and fit in u32, the `i64 as u32` cast silently truncates. If a malformed `/proc/*/stat` file contains a negative number or a value exceeding u32::MAX (e.g., from a crafted proc filesystem), the silent truncation could cause the wrong PID to be signaled. The tpgid check at line 70 (`tpgid <= 0`) only guards one of the three cast sites.
 
-### WR-04: `u32` to `i32` cast for PID can overflow for PIDs above `i32::MAX`
-
-**File:** `src/process/mod.rs:93,106,115,167`
-**Issue:** All calls to `Pid::from_raw(p as i32)` cast `u32` PIDs to `i32` without checking for overflow. While Linux limits PIDs to at most ~4 million by default (`/proc/sys/kernel/pid_max` max is 2^22), the kernel *can* be configured to allow PIDs up to 2^22 on 64-bit systems, and the data types involved (`u32` from `ps` output or `/proc` parsing) allow values up to 2^32-1. A PID above `i32::MAX` (2,147,483,647) would wrap to a negative value, and `Pid::from_raw` with a negative value represents a process group ID, not a single process. This would cause signals to be sent to the wrong target (a process group rather than a process).
-**Fix:**
+**Fix:** Use `u32::try_from()` with a fallback:
 ```rust
-fn pid_to_nix(pid: u32) -> Option<Pid> {
-    i32::try_from(pid).ok().map(Pid::from_raw)
+if let Some(ppid) = parse_stat_field(&content, 3) {
+    if let Ok(ppid_u32) = u32::try_from(ppid) {
+        children_map.entry(ppid_u32).or_default().push(child_pid);
+    }
 }
 ```
-Then use `if let Some(nix_pid) = pid_to_nix(p) { kill(nix_pid, signal) }` instead of bare casts.
 
 ## Info
 
-### IN-01: Misleading comment grouping in `apply_field_to_global`
-
-**File:** `src/tui/settings/fields.rs:1815-1823`
-**Issue:** The `// Sandbox` comment on line 1815 groups `YoloModeDefault`, `StrictHotkeys`, and `AgentStatusHooks` under the Sandbox heading, but these fields all write to `config.session.*` (Session category). The match arms are functionally correct; only the comment is misleading.
-**Fix:** Move these three arms below a `// Session` comment, after the Sandbox section ends at line 1853 (after `ContainerRuntime`).
-
-### IN-02: `web_session_create_sbx` test body is a no-op placeholder
+### IN-01: Placeholder test with no meaningful assertions
 
 **File:** `tests/web_session_create.rs:27-46`
-**Issue:** The test `web_session_create_sbx` performs the `sbx_available()` check twice (once redundantly at line 28 after the gate, and again at line 35-39 via `sbx.is_available()`), then prints a message and returns. It serves only as a compilation gate, not as an actual integration test. The function name and doc comment suggest it tests web session creation, which it does not. This could mislead developers into thinking the integration path is tested.
-**Fix:** Either rename the test to `web_session_create_sbx_compiles` (or similar) to clarify its purpose, or implement the actual test body described in the comments. Additionally, remove the redundant `sbx_available()` check at line 28 since the `#[ignore]` attribute already prevents it from running in normal CI.
+**Issue:** The `web_session_create_sbx` test is marked `#[ignore]` and its body only checks `sbx.is_available()` (duplicating the guard at line 28-31), then prints to stderr and returns. It does not exercise the web session create flow. The test provides compile-gate value only, which could be achieved with a simpler approach that does not appear to be a real test.
+
+**Fix:** Either implement the actual web session create flow (POST to the API endpoint, verify response), or rename to `compile_gate_web_session_create_sbx` to communicate its limited purpose and prevent confusion during test triage.
 
 ---
 
-_Reviewed: 2026-05-16T12:00:00Z_
+_Reviewed: 2026-05-17T14:30:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
