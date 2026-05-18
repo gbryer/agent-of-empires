@@ -46,17 +46,25 @@ You can also pick the runtime in the TUI under **Sandbox > Container Runtime**.
 
 ## Usage
 
+All the standard sandbox flags work:
+
 ```bash
+# Create an sbx-backed sandboxed session
 aoe add --sandbox .
+
+# Launch with a specific image
 aoe add --sandbox --sandbox-image my-custom-image:latest .
 ```
 
-sbx sandboxes are microVMs, not containers. Some sandbox settings that work with Docker do not apply to sbx:
+In the TUI, the **Sandbox** toggle uses whichever runtime is configured in `container_runtime`.
 
-- **`volume_ignores`** has no effect (sbx does not support anonymous volumes).
-- **`mount_ssh`** has no effect. SSH uses the sbx proxy (`SSH_AUTH_SOCK`) instead of volume-mounted keys.
-- **Convenience mounts** whose host and container paths differ (like `.gitconfig`) are silently dropped. AoE logs a warning when this happens.
-- **Read-only mounts** (`:ro`) are not supported.
+## Compatibility Notes
+
+sbx sandboxes are microVMs, not containers. A few things work differently from Docker:
+
+- **Volume mounts** do not support the `:ro` read-only flag. Mounts whose host and container paths differ (like `.gitconfig`) are silently dropped; AoE logs a warning when this happens.
+- **Anonymous volumes** are not supported, so the `volume_ignores` setting has no effect.
+- **SSH** uses the sbx proxy (`SSH_AUTH_SOCK`) instead of volume-mounted keys. The `mount_ssh` setting has no effect.
 - **Port publishing** happens after sandbox creation, not at create time. AoE handles this automatically; failures surface as warnings.
 - **Disk usage.** Each sandbox has its own filesystem. Stopped sandboxes still consume disk; remove them with `aoe remove`.
 
