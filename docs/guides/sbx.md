@@ -2,6 +2,8 @@
 
 ## Overview
 
+> **Early Access.** Docker Sandboxes are in Early Access. The sbx CLI, kit format, and behavior may change between releases.
+
 AoE supports [Docker Sandboxes (sbx)](https://docs.docker.com/sandbox/) as a sandbox runtime. Each sandbox runs inside its own microVM rather than sharing the host kernel, providing stronger isolation than standard Docker containers.
 
 ## Prerequisites
@@ -76,12 +78,3 @@ AoE runs `sbx version` and `sbx ls` to check health. Common issues:
 ### Sandbox creation fails after sbx update
 
 The sbx kit format is experimental; schema changes may require an AoE update.
-
-### Debug Logging
-
-```bash
-AGENT_OF_EMPIRES_DEBUG=1 aoe add --sandbox .
-```
-
-- **Linux:** `~/.config/agent-of-empires/debug.log`
-- **macOS:** `~/.agent-of-empires/debug.log`
